@@ -1,6 +1,8 @@
-import { app, BrowserWindow } from 'electron'
+import 'dotenv/config'
+import { app, BrowserWindow, session, desktopCapturer } from 'electron'
 import { join } from 'path'
 import { registerIpcHandlers } from './ipc-handlers'
+import * as stateBus from './state-bus'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -16,6 +18,12 @@ function createMainWindow(): void {
     }
   })
 
+  // Forward renderer console messages to the terminal for debugging
+  mainWindow.webContents.on('console-message', (_event, level, message) => {
+    const tag = ['verbose', 'info', 'warn', 'error'][level] || 'log'
+    console.log(`[renderer:${tag}] ${message}`)
+  })
+
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -27,9 +35,36 @@ function createMainWindow(): void {
   })
 }
 
+function setupDisplayMediaHandler(): void {
+  console.log('[main] Setting up setDisplayMediaRequestHandler')
+  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+    console.log('[main:displayMediaHandler] Handler invoked')
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'] })
+      console.log('[main:displayMediaHandler] desktopCapturer returned %d source(s)', sources.length)
+      if (sources.length > 0) {
+        console.log('[main:displayMediaHandler] Providing source: id=%s name="%s"', sources[0].id, sources[0].name)
+        stateBus.setSelectedSource(sources[0].id)
+        callback({ video: sources[0] })
+        return
+      }
+      console.warn('[main:displayMediaHandler] No screen sources found — denying request')
+    } catch (err) {
+      console.error('[main:displayMediaHandler] desktopCapturer.getSources failed:', err)
+    }
+    // Always call the callback so getDisplayMedia rejects cleanly
+    // instead of hanging indefinitely
+    // @ts-expect-error Electron accepts empty call to deny the request
+    callback()
+  })
+  console.log('[main] setDisplayMediaRequestHandler registered')
+}
+
 app.whenReady().then(() => {
+  setupDisplayMediaHandler()
   registerIpcHandlers()
   createMainWindow()
+  console.log('[main] App ready, main window created')
 })
 
 app.on('window-all-closed', () => {

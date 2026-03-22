@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx electron:*)",
+      "Bash(node -e \"console.log\\(''electron:'', require\\(''electron/package.json''\\).version\\)\")",
+      "Bash(./node_modules/.bin/electron diag.cjs)",
+      "Bash(node -e \"console.log\\(require\\(''electron''\\)\\)\")",
+      "Bash(node_modules/electron/dist/electron.exe diag.cjs)",
+      "Bash(node -e \"const p = require\\(''electron''\\); const { execSync } = require\\(''child_process''\\); console.log\\(execSync\\(p + '' diag.cjs'', { encoding: ''utf8'', timeout: 20000 }\\)\\)\")",
+      "Bash(node -e \"const p = require\\(''electron''\\); const { execSync } = require\\(''child_process''\\); console.log\\(execSync\\(''\"\"'' + p + ''\"\" diag.cjs'', { encoding: ''utf8'', timeout: 20000 }\\)\\)\")",
+      "Bash(taskkill /F /IM electron.exe)",
+      "Bash(node -e \":*)",
+      "Read(//c/Users/XOVRDU~1/AppData/Local/Temp/xovr-toolpath/4a0fa75c-03be-41dd-859a-46f0453c7d71/captures 2>/dev/null && file C:UsersXOVRDU~1AppDataLocalTempxovr-toolpath4a0fa75c-03be-41dd-859a-46f0453c7d71capturesstep-0.jpg 2>/dev/**)",
+      "Read(//c/Users/XOVRDU~1/AppData/Local/Temp/xovr-toolpath/4a0fa75c-03be-41dd-859a-46f0453c7d71/captures/**)",
+      "Bash(powershell -Command \"Get-ItemProperty ''HKCU:\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run'' 2>$null | Format-List; Get-ItemProperty ''HKLM:\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run'' 2>$null | Format-List\")",
+      "Bash(powershell -File:*)",
+      "Bash(powershell -Command \"Start-Process ''C:\\\\Program Files\\\\Ditto\\\\unins000.exe'' -ArgumentList ''/SILENT'' -Verb RunAs -Wait\")",
+      "Bash(powershell -Command \"Test-Path ''C:\\\\Program Files\\\\Ditto\\\\Ditto.exe''\")",
+      "Bash(node -e \"console.log\\(require\\(''ffmpeg-static''\\)\\)\")",
+      "Bash(node -e \"const OpenAI = require\\(''openai''\\); console.log\\(''openai version:'', require\\(''openai/package.json''\\).version\\)\")",
+      "Bash(node -e \"console.log\\(require\\(''openai/package.json''\\).version\\)\")"
+    ]
+  }
+}
