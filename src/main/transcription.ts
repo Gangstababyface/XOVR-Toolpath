@@ -1,5 +1,6 @@
 import { join, basename } from 'path'
-import { readFileSync, statSync, unlinkSync } from 'fs'
+import { statSync, unlinkSync } from 'fs'
+import { readFile } from 'fs/promises'
 import { BrowserWindow, dialog } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
 import ffprobeInstaller from '@ffprobe-installer/ffprobe'
@@ -27,6 +28,9 @@ console.log('[transcription] ffprobe path: %s', ffprobeInstaller.path)
 const SEGMENT_PADDING_MS = 500
 const TRAILING_NARRATION_THRESHOLD_MS = 2000
 const MIN_SEGMENT_DURATION_MS = 300
+const WHISPER_TIMEOUT_MS = 120_000
+const MAX_TRANSCRIPTION_ATTEMPTS = 3
+const RETRY_BASE_MS = 1000
 
 // ── Progress broadcast ──
 
@@ -43,6 +47,117 @@ function broadcastProgress(progress: TranscriptionProgress): void {
       win.webContents.send(IpcChannels.TRANSCRIBE_PROGRESS, progress)
     }
   }
+}
+
+// ── Error classification ──
+
+function classifyError(err: unknown): 'retryable' | 'permanent' {
+  const errObj = err as Record<string, unknown>
+  const status = typeof errObj?.status === 'number' ? errObj.status : undefined
+  const code = typeof errObj?.code === 'string' ? errObj.code : undefined
+  const name = typeof errObj?.name === 'string' ? errObj.name : undefined
+
+  // Permanent: auth, bad request, forbidden, not found
+  if (status === 400 || status === 401 || status === 403 || status === 404) {
+    return 'permanent'
+  }
+
+  // Retryable: rate limit
+  if (status === 429) return 'retryable'
+
+  // Retryable: server errors
+  if (status !== undefined && status >= 500) return 'retryable'
+
+  // Retryable: SDK connection/timeout errors
+  if (name === 'APIConnectionError' || name === 'APIConnectionTimeoutError') {
+    return 'retryable'
+  }
+
+  // Retryable: transport-layer error codes
+  if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ECONNREFUSED' ||
+      code === 'EPIPE' || code === 'EAI_AGAIN' || code === 'UND_ERR_SOCKET') {
+    return 'retryable'
+  }
+
+  // Check cause for transport errors
+  const cause = errObj?.cause as Record<string, unknown> | undefined
+  if (cause) {
+    const causeCode = typeof cause.code === 'string' ? cause.code : undefined
+    if (causeCode === 'ECONNRESET' || causeCode === 'ETIMEDOUT' || causeCode === 'ECONNREFUSED' ||
+        causeCode === 'EPIPE' || causeCode === 'EAI_AGAIN' || causeCode === 'UND_ERR_SOCKET') {
+      return 'retryable'
+    }
+  }
+
+  // Retryable: generic fetch/network errors without a clear permanent status
+  if (name === 'TypeError' && typeof errObj?.message === 'string' &&
+      (errObj.message as string).toLowerCase().includes('fetch')) {
+    return 'retryable'
+  }
+
+  // Default: treat unknown errors as retryable to avoid losing work
+  return 'retryable'
+}
+
+function isTransportError(err: unknown): boolean {
+  const errObj = err as Record<string, unknown>
+  const name = typeof errObj?.name === 'string' ? errObj.name : ''
+  const code = typeof errObj?.code === 'string' ? errObj.code : ''
+
+  if (name === 'APIConnectionError' || name === 'APIConnectionTimeoutError') return true
+  if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ECONNREFUSED' ||
+      code === 'EPIPE' || code === 'UND_ERR_SOCKET') return true
+
+  const cause = errObj?.cause as Record<string, unknown> | undefined
+  if (cause) {
+    const causeCode = typeof cause.code === 'string' ? cause.code : ''
+    if (causeCode === 'ECONNRESET' || causeCode === 'ETIMEDOUT' || causeCode === 'ECONNREFUSED' ||
+        causeCode === 'EPIPE' || causeCode === 'UND_ERR_SOCKET') return true
+  }
+
+  return false
+}
+
+function logErrorDetails(prefix: string, err: unknown, attempt: number, elapsedMs: number): void {
+  const errObj = err as Record<string, unknown>
+  const msg = err instanceof Error ? err.message : String(err)
+  const classification = classifyError(err)
+
+  console.error(
+    '%s FAILED (attempt %d/%d, elapsed %dms, classification: %s)',
+    prefix, attempt, MAX_TRANSCRIPTION_ATTEMPTS, elapsedMs, classification
+  )
+  console.error('%s   message: %s', prefix, msg)
+  console.error('%s   error.name: %s', prefix, String(errObj?.name ?? 'N/A'))
+  console.error('%s   error.status: %s', prefix, String(errObj?.status ?? 'N/A'))
+  console.error('%s   error.code: %s', prefix, String(errObj?.code ?? 'N/A'))
+  console.error('%s   error.type: %s', prefix, String(errObj?.type ?? 'N/A'))
+
+  if (errObj?.cause) {
+    const cause = errObj.cause as Record<string, unknown>
+    console.error('%s   error.cause.name: %s', prefix, String(cause?.name ?? 'N/A'))
+    console.error('%s   error.cause.message: %s', prefix, String(cause?.message ?? 'N/A'))
+    console.error('%s   error.cause.code: %s', prefix, String(cause?.code ?? 'N/A'))
+  } else {
+    console.error('%s   error.cause: (none)', prefix)
+  }
+
+  try {
+    const serialized = JSON.stringify(err, Object.getOwnPropertyNames(err as object))
+    console.error('%s   SERIALIZED: %s', prefix, serialized)
+  } catch {
+    console.error('%s   SERIALIZED: (could not serialize)', prefix)
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function retryDelayMs(attempt: number): number {
+  const exponential = RETRY_BASE_MS * Math.pow(2, attempt)
+  const jitter = Math.random() * RETRY_BASE_MS
+  return Math.round(exponential + jitter)
 }
 
 // ── FFmpeg helpers ──
@@ -75,7 +190,6 @@ function getAudioDurationMs(audioPath: string): Promise<number> {
         return
       }
 
-      // Fallback: Chrome WebM has no duration header. Remux to MKV to compute it.
       console.log('[transcription] Duration unavailable from WebM header, remuxing to MKV to compute...')
       const tempMkv = audioPath + '.duration-probe.mkv'
 
@@ -87,7 +201,6 @@ function getAudioDurationMs(audioPath: string): Promise<number> {
         })
         .on('end', () => {
           ffmpeg.ffprobe(tempMkv, (probeErr, mkvMeta) => {
-            // Clean up temp file regardless of result
             try { unlinkSync(tempMkv) } catch { /* ignore */ }
 
             if (probeErr) {
@@ -152,42 +265,75 @@ function extractAudioSegment(
   })
 }
 
-// ── Whisper API ──
+// ── OpenAI client factory ──
 
-const WHISPER_TIMEOUT_MS = 120_000
-
-async function transcribeSegment(segmentPath: string): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY environment variable is not set')
+function createOpenAIClient(apiKey: string): OpenAI {
+  if (typeof globalThis.fetch === 'function') {
+    console.log('[transcription:client] OpenAI client initialized (fetch: globalThis.fetch + duplex:half)')
+    // Wrap fetch to inject duplex:'half' for streaming uploads.
+    // Mutate init in-place instead of spreading to avoid reconstructing
+    // the Request object, which would disturb a locked body stream.
+    const wrappedFetch: typeof globalThis.fetch = (input, init) => {
+      if (init) {
+        (init as Record<string, unknown>).duplex = 'half'
+      }
+      return globalThis.fetch(input, init)
+    }
+    return new OpenAI({ apiKey, timeout: WHISPER_TIMEOUT_MS, fetch: wrappedFetch })
   }
+  console.log('[transcription:client] OpenAI client initialized (fetch: default)')
+  return new OpenAI({ apiKey, timeout: WHISPER_TIMEOUT_MS })
+}
 
-  const fileStats = statSync(segmentPath)
-  const fileSizeKB = Math.round(fileStats.size / 1024)
+// ── Preflight connectivity check ──
 
-  const model = 'whisper-1'
-
-  console.log(
-    '[transcription:whisper] PRE-REQUEST: key_present=%s model=%s file=%s size=%dKB',
+async function preflightCheck(apiKey: string): Promise<boolean> {
+  console.log('[transcription:preflight] Starting connectivity check...')
+  console.log('[transcription:preflight] key_present=%s key_prefix=%s',
     Boolean(apiKey),
-    model,
-    segmentPath,
-    fileSizeKB
+    apiKey.slice(0, 7) + '...'
   )
 
-  if (fileStats.size === 0) {
-    console.log('[transcription:whisper] File is empty, returning [No audio]')
-    return '[No audio]'
+  const client = createOpenAIClient(apiKey)
+  const startTime = Date.now()
+
+  try {
+    await client.models.list()
+    const elapsedMs = Date.now() - startTime
+    console.log('[transcription:preflight] SUCCESS (elapsed %dms) — OpenAI API is reachable', elapsedMs)
+    return true
+  } catch (err) {
+    const elapsedMs = Date.now() - startTime
+    logErrorDetails('[transcription:preflight]', err, 1, elapsedMs)
+
+    const classification = classifyError(err)
+    if (classification === 'permanent') {
+      console.error('[transcription:preflight] Permanent error — check API key and permissions')
+    } else {
+      console.error('[transcription:preflight] Transport/connection error — network may be blocked or unstable')
+    }
+    return false
   }
+}
 
-  const client = new OpenAI({ apiKey, timeout: WHISPER_TIMEOUT_MS })
+// ── Single transcription attempt ──
 
-  // Read segment into memory and create an upload file object
-  // instead of passing a raw fs.createReadStream which can stall
-  // in Electron's bundled Node environment.
-  const buffer = readFileSync(segmentPath)
-  const uploadFile = await toFile(buffer, basename(segmentPath))
+async function attemptTranscription(
+  client: OpenAI,
+  buffer: Buffer,
+  filename: string,
+  model: string,
+  stepIndex: number,
+  attempt: number,
+  clientLabel: string
+): Promise<string> {
+  console.log(
+    '[transcription:whisper] PRE-REQUEST: step=%d attempt=%d/%d model=%s client=%s size=%dKB',
+    stepIndex, attempt, MAX_TRANSCRIPTION_ATTEMPTS, model, clientLabel,
+    Math.round(buffer.length / 1024)
+  )
 
+  const uploadFile = await toFile(buffer, filename)
   const startTime = Date.now()
 
   const transcription = await client.audio.transcriptions.create({
@@ -198,17 +344,109 @@ async function transcribeSegment(segmentPath: string): Promise<string> {
 
   const elapsedMs = Date.now() - startTime
   console.log(
-    '[transcription:whisper] POST-REQUEST: elapsed=%dms response_type=%s response_length=%d',
-    elapsedMs,
+    '[transcription:whisper] POST-REQUEST: step=%d attempt=%d client=%s elapsed=%dms response_type=%s response_length=%d',
+    stepIndex, attempt, clientLabel, elapsedMs,
     typeof transcription,
     typeof transcription === 'string' ? transcription.length : JSON.stringify(transcription).length
   )
 
   const text = String(transcription).trim()
-  if (!text) {
+  return text || '[No audio]'
+}
+
+// ── Whisper API with retry + transport fallback ──
+
+async function transcribeSegmentWithRetry(
+  segmentPath: string,
+  stepIndex: number,
+  apiKey: string
+): Promise<string> {
+  const fileStats = statSync(segmentPath)
+  const model = 'whisper-1'
+
+  if (fileStats.size === 0) {
+    console.log('[transcription:whisper] Step %d: file is empty, returning [No audio]', stepIndex)
     return '[No audio]'
   }
-  return text
+
+  const buffer = await readFile(segmentPath)
+  const filename = basename(segmentPath)
+
+  // ── Phase A: try with default client (Node undici fetch) ──
+
+  const defaultClient = createOpenAIClient(apiKey)
+  let lastTransportError: unknown = null
+
+  for (let attempt = 1; attempt <= MAX_TRANSCRIPTION_ATTEMPTS; attempt++) {
+    const startTime = Date.now()
+
+    try {
+      return await attemptTranscription(
+        defaultClient, buffer, filename, model, stepIndex, attempt, 'default'
+      )
+    } catch (err) {
+      const elapsedMs = Date.now() - startTime
+      logErrorDetails(`[transcription:whisper] Step ${stepIndex}`, err, attempt, elapsedMs)
+
+      const classification = classifyError(err)
+
+      if (classification === 'permanent') {
+        console.error('[transcription:whisper] Step %d: permanent error, not retrying', stepIndex)
+        throw err
+      }
+
+      if (isTransportError(err)) {
+        lastTransportError = err
+      }
+
+      if (attempt < MAX_TRANSCRIPTION_ATTEMPTS) {
+        const delayMs = retryDelayMs(attempt - 1)
+        console.log('[transcription:whisper] Step %d: will retry in %dms (attempt %d/%d failed)',
+          stepIndex, delayMs, attempt, MAX_TRANSCRIPTION_ATTEMPTS)
+        await sleep(delayMs)
+      } else {
+        console.error(
+          '[transcription:whisper] Step %d: all %d attempts with default client exhausted',
+          stepIndex, MAX_TRANSCRIPTION_ATTEMPTS
+        )
+      }
+    }
+  }
+
+  // ── Phase B: if all retries failed with transport errors, try globalThis.fetch ──
+
+  if (lastTransportError) {
+    console.log(
+      '[transcription:whisper] Step %d: default client failed with transport errors, trying globalThis.fetch fallback...',
+      stepIndex
+    )
+
+    const fallbackClient = createOpenAIClient(apiKey)
+    const startTime = Date.now()
+
+    try {
+      const result = await attemptTranscription(
+        fallbackClient, buffer, filename, model, stepIndex, 1, 'globalThis.fetch'
+      )
+      console.log(
+        '[transcription:whisper] Step %d: globalThis.fetch fallback SUCCEEDED — transport issue is Node-specific',
+        stepIndex
+      )
+      return result
+    } catch (err) {
+      const elapsedMs = Date.now() - startTime
+      logErrorDetails(`[transcription:whisper] Step ${stepIndex} (globalThis.fetch fallback)`, err, 1, elapsedMs)
+      console.error(
+        '[transcription:whisper] Step %d: globalThis.fetch fallback also FAILED',
+        stepIndex
+      )
+      throw err
+    }
+  }
+
+  // Should not reach here — the loop above throws on permanent errors
+  // and the fallback path throws on failure
+  throw new Error(`Step ${stepIndex}: transcription failed after all attempts`)
 }
 
 // ── Trailing narration ──
@@ -254,7 +492,34 @@ export async function transcribeAllSteps(): Promise<void> {
   console.log('[transcription] Starting transcription for %d steps', state.steps.length)
   console.log('[transcription] Audio file: %s', audioPath)
 
-  // Step 1 — probe audio duration
+  // ── Preflight: verify API key and connectivity ──
+
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    console.error('[transcription] OPENAI_API_KEY is not set — aborting')
+    broadcastProgress({
+      stepIndex: 0,
+      total: state.steps.length,
+      status: 'error',
+      message: 'OPENAI_API_KEY environment variable is not set'
+    })
+    return
+  }
+
+  const preflightOk = await preflightCheck(apiKey)
+  if (!preflightOk) {
+    console.error('[transcription] Preflight failed — aborting transcription to avoid wasting time')
+    broadcastProgress({
+      stepIndex: 0,
+      total: state.steps.length,
+      status: 'error',
+      message: 'OpenAI API connectivity check failed — see logs for details'
+    })
+    return
+  }
+
+  // ── Probe audio duration ──
+
   let audioDurationMs: number
   try {
     audioDurationMs = await getAudioDurationMs(audioPath)
@@ -271,7 +536,8 @@ export async function transcribeAllSteps(): Promise<void> {
     return
   }
 
-  // Step 2 — check for trailing narration
+  // ── Check for trailing narration ──
+
   const steps = state.steps
   const lastStepTimestamp = steps[steps.length - 1].timestamp
   const trailingDurationMs = audioDurationMs - lastStepTimestamp
@@ -285,7 +551,6 @@ export async function transcribeAllSteps(): Promise<void> {
     const accepted = await promptTrailingNarration(trailingDurationMs)
 
     if (accepted) {
-      // Create a final step using the last step's screenshot
       const lastStep = steps[steps.length - 1]
       const trailingStep: Step = {
         id: uuidv4(),
@@ -306,7 +571,8 @@ export async function transcribeAllSteps(): Promise<void> {
     }
   }
 
-  // Re-read state after potential trailing step addition
+  // ── Extract and transcribe each step sequentially ──
+
   const currentState = stateBus.getState()
   const allSteps = currentState.steps
   const sessionDir = currentState.sessionDir
@@ -316,9 +582,11 @@ export async function transcribeAllSteps(): Promise<void> {
   }
 
   const total = allSteps.length
+  let succeeded = 0
+  let failed = 0
+  let noAudio = 0
   console.log('[transcription] Transcribing %d steps sequentially', total)
 
-  // Step 3 — extract and transcribe each step sequentially
   for (let i = 0; i < total; i++) {
     const step = allSteps[i]
 
@@ -340,6 +608,7 @@ export async function transcribeAllSteps(): Promise<void> {
       console.log('[transcription] Step %d: segment too short (%d ms), marking [No audio]', i, segDurationMs)
       stateBus.updateStepTranscript(step.id, '[No audio]')
       broadcastProgress({ stepIndex: i, total, status: 'done', message: '[No audio]' })
+      noAudio++
       continue
     }
 
@@ -354,42 +623,37 @@ export async function transcribeAllSteps(): Promise<void> {
       console.log('[transcription] Step %d: segment extracted to %s', i, segmentPath)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error('[transcription] Step %d: extraction failed:', i, msg)
+      console.error('[transcription] Step %d: extraction failed: %s', i, msg)
       stateBus.updateStepTranscript(step.id, '[Transcription failed]')
       broadcastProgress({ stepIndex: i, total, status: 'error', message: 'Extraction failed: ' + msg })
+      failed++
       continue
     }
 
-    // Transcribe segment
+    // Transcribe segment (with retry + fallback)
     broadcastProgress({ stepIndex: i, total, status: 'transcribing' })
 
     try {
-      const transcript = await transcribeSegment(segmentPath)
-      console.log('[transcription] Step %d: transcript = "%s"', i, transcript.slice(0, 80))
+      const transcript = await transcribeSegmentWithRetry(segmentPath, i, apiKey)
+      console.log('[transcription] Step %d: FINAL RESULT = "%s"', i, transcript.slice(0, 100))
       stateBus.updateStepTranscript(step.id, transcript)
       broadcastProgress({ stepIndex: i, total, status: 'done' })
-    } catch (err: unknown) {
-      const errObj = err as Record<string, unknown>
+      if (transcript === '[No audio]') {
+        noAudio++
+      } else {
+        succeeded++
+      }
+    } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error('[transcription] Step %d: Whisper API failed:', i, msg)
-      console.error('[transcription:whisper] ERROR DETAILS: name=%s status=%s code=%s type=%s',
-        errObj?.name ?? 'N/A',
-        errObj?.status ?? 'N/A',
-        errObj?.code ?? 'N/A',
-        errObj?.type ?? 'N/A'
-      )
-      if (errObj?.cause) {
-        console.error('[transcription:whisper] ERROR CAUSE:', errObj.cause)
-      }
-      try {
-        console.error('[transcription:whisper] SERIALIZED:', JSON.stringify(err, Object.getOwnPropertyNames(err as object)))
-      } catch {
-        console.error('[transcription:whisper] (could not serialize error)')
-      }
+      console.error('[transcription] Step %d: FINAL OUTCOME — failed after all retries+fallback: %s', i, msg)
       stateBus.updateStepTranscript(step.id, '[Transcription failed]')
       broadcastProgress({ stepIndex: i, total, status: 'error', message: 'Whisper API failed: ' + msg })
+      failed++
     }
   }
 
-  console.log('[transcription] All steps transcribed')
+  console.log(
+    '[transcription] SUMMARY: total=%d succeeded=%d failed=%d no_audio=%d',
+    total, succeeded, failed, noAudio
+  )
 }
