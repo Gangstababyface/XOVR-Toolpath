@@ -5,7 +5,7 @@ import { BrowserWindow, dialog } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
 import ffprobeInstaller from '@ffprobe-installer/ffprobe'
 import ffmpeg from 'fluent-ffmpeg'
-import OpenAI, { toFile } from 'openai'
+import OpenAI from 'openai'
 import { v4 as uuidv4 } from 'uuid'
 import { IpcChannels } from '../shared/ipc-channels'
 import type { Step } from '../shared/types'
@@ -90,32 +90,12 @@ function classifyError(err: unknown): 'retryable' | 'permanent' {
   }
 
   // Retryable: generic fetch/network errors without a clear permanent status
-  if (name === 'TypeError' && typeof errObj?.message === 'string' &&
-      (errObj.message as string).toLowerCase().includes('fetch')) {
+  if (name === 'TypeError') {
     return 'retryable'
   }
 
   // Default: treat unknown errors as retryable to avoid losing work
   return 'retryable'
-}
-
-function isTransportError(err: unknown): boolean {
-  const errObj = err as Record<string, unknown>
-  const name = typeof errObj?.name === 'string' ? errObj.name : ''
-  const code = typeof errObj?.code === 'string' ? errObj.code : ''
-
-  if (name === 'APIConnectionError' || name === 'APIConnectionTimeoutError') return true
-  if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ECONNREFUSED' ||
-      code === 'EPIPE' || code === 'UND_ERR_SOCKET') return true
-
-  const cause = errObj?.cause as Record<string, unknown> | undefined
-  if (cause) {
-    const causeCode = typeof cause.code === 'string' ? cause.code : ''
-    if (causeCode === 'ECONNRESET' || causeCode === 'ETIMEDOUT' || causeCode === 'ECONNREFUSED' ||
-        causeCode === 'EPIPE' || causeCode === 'UND_ERR_SOCKET') return true
-  }
-
-  return false
 }
 
 function logErrorDetails(prefix: string, err: unknown, attempt: number, elapsedMs: number): void {
@@ -315,45 +295,69 @@ async function preflightCheck(apiKey: string): Promise<boolean> {
   }
 }
 
-// ── Single transcription attempt ──
+// ── Single transcription attempt (direct fetch — bypasses OpenAI SDK) ──
+// The SDK internally builds a multipart streaming body but does NOT set
+// `duplex: 'half'` on the RequestInit. Electron's Chromium-based fetch
+// (undici) requires it, so every SDK upload fails with:
+//   "TypeError: RequestInit: duplex option is required when sending a body."
+// A direct fetch with `duplex: 'half'` sidesteps the problem entirely.
 
 async function attemptTranscription(
-  client: OpenAI,
+  apiKey: string,
   buffer: Buffer,
   filename: string,
   model: string,
   stepIndex: number,
-  attempt: number,
-  clientLabel: string
+  attempt: number
 ): Promise<string> {
   console.log(
-    '[transcription:whisper] PRE-REQUEST: step=%d attempt=%d/%d model=%s client=%s size=%dKB',
-    stepIndex, attempt, MAX_TRANSCRIPTION_ATTEMPTS, model, clientLabel,
+    '[transcription:whisper] PRE-REQUEST: step=%d attempt=%d/%d model=%s size=%dKB',
+    stepIndex, attempt, MAX_TRANSCRIPTION_ATTEMPTS, model,
     Math.round(buffer.length / 1024)
   )
 
-  const uploadFile = await toFile(buffer, filename)
+  // Fresh FormData per attempt — not reused across retries
+  const formData = new FormData()
+  formData.append('file', new Blob([buffer as any]), filename)
+  formData.append('model', model)
+  formData.append('response_format', 'text')
+
   const startTime = Date.now()
 
-  const transcription = await client.audio.transcriptions.create({
-    model,
-    file: uploadFile,
-    response_format: 'text'
-  })
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: formData,
+    duplex: 'half',
+  } as any)
 
   const elapsedMs = Date.now() - startTime
+
+  if (!response.ok) {
+    const errorBody = await response.text()
+    console.error(
+      '[transcription:whisper] POST-REQUEST: step=%d attempt=%d elapsed=%dms status=%d body=%s',
+      stepIndex, attempt, elapsedMs, response.status, errorBody.slice(0, 500)
+    )
+    const err = new Error(`Whisper API error ${response.status}: ${errorBody}`) as any
+    err.status = response.status
+    throw err
+  }
+
+  const responseText = await response.text()
+
   console.log(
-    '[transcription:whisper] POST-REQUEST: step=%d attempt=%d client=%s elapsed=%dms response_type=%s response_length=%d',
-    stepIndex, attempt, clientLabel, elapsedMs,
-    typeof transcription,
-    typeof transcription === 'string' ? transcription.length : JSON.stringify(transcription).length
+    '[transcription:whisper] POST-REQUEST: step=%d attempt=%d elapsed=%dms status=%d response_length=%d',
+    stepIndex, attempt, elapsedMs, response.status, responseText.length
   )
 
-  const text = String(transcription).trim()
+  const text = responseText.trim()
   return text || '[No audio]'
 }
 
-// ── Whisper API with retry + transport fallback ──
+// ── Whisper API with retry ──
 
 async function transcribeSegmentWithRetry(
   segmentPath: string,
@@ -371,17 +375,12 @@ async function transcribeSegmentWithRetry(
   const buffer = await readFile(segmentPath)
   const filename = basename(segmentPath)
 
-  // ── Phase A: try with default client (Node undici fetch) ──
-
-  const defaultClient = createOpenAIClient(apiKey)
-  let lastTransportError: unknown = null
-
   for (let attempt = 1; attempt <= MAX_TRANSCRIPTION_ATTEMPTS; attempt++) {
     const startTime = Date.now()
 
     try {
       return await attemptTranscription(
-        defaultClient, buffer, filename, model, stepIndex, attempt, 'default'
+        apiKey, buffer, filename, model, stepIndex, attempt
       )
     } catch (err) {
       const elapsedMs = Date.now() - startTime
@@ -394,10 +393,6 @@ async function transcribeSegmentWithRetry(
         throw err
       }
 
-      if (isTransportError(err)) {
-        lastTransportError = err
-      }
-
       if (attempt < MAX_TRANSCRIPTION_ATTEMPTS) {
         const delayMs = retryDelayMs(attempt - 1)
         console.log('[transcription:whisper] Step %d: will retry in %dms (attempt %d/%d failed)',
@@ -405,46 +400,13 @@ async function transcribeSegmentWithRetry(
         await sleep(delayMs)
       } else {
         console.error(
-          '[transcription:whisper] Step %d: all %d attempts with default client exhausted',
+          '[transcription:whisper] Step %d: all %d attempts exhausted',
           stepIndex, MAX_TRANSCRIPTION_ATTEMPTS
         )
       }
     }
   }
 
-  // ── Phase B: if all retries failed with transport errors, try globalThis.fetch ──
-
-  if (lastTransportError) {
-    console.log(
-      '[transcription:whisper] Step %d: default client failed with transport errors, trying globalThis.fetch fallback...',
-      stepIndex
-    )
-
-    const fallbackClient = createOpenAIClient(apiKey)
-    const startTime = Date.now()
-
-    try {
-      const result = await attemptTranscription(
-        fallbackClient, buffer, filename, model, stepIndex, 1, 'globalThis.fetch'
-      )
-      console.log(
-        '[transcription:whisper] Step %d: globalThis.fetch fallback SUCCEEDED — transport issue is Node-specific',
-        stepIndex
-      )
-      return result
-    } catch (err) {
-      const elapsedMs = Date.now() - startTime
-      logErrorDetails(`[transcription:whisper] Step ${stepIndex} (globalThis.fetch fallback)`, err, 1, elapsedMs)
-      console.error(
-        '[transcription:whisper] Step %d: globalThis.fetch fallback also FAILED',
-        stepIndex
-      )
-      throw err
-    }
-  }
-
-  // Should not reach here — the loop above throws on permanent errors
-  // and the fallback path throws on failure
   throw new Error(`Step ${stepIndex}: transcription failed after all attempts`)
 }
 
@@ -656,7 +618,7 @@ export async function transcribeAllSteps(): Promise<void> {
       continue
     }
 
-    // Transcribe segment (with retry + fallback)
+    // Transcribe segment (with retry)
     broadcastProgress({ stepIndex: i, total, status: 'transcribing' })
 
     try {
@@ -671,7 +633,7 @@ export async function transcribeAllSteps(): Promise<void> {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error('[transcription] Step %d: FINAL OUTCOME — failed after all retries+fallback: %s', i, msg)
+      console.error('[transcription] Step %d: FINAL OUTCOME — failed after all retries: %s', i, msg)
       stateBus.updateStepTranscript(step.id, '[Transcription failed]')
       broadcastProgress({ stepIndex: i, total, status: 'error', message: 'Whisper API failed: ' + msg })
       failed++
