@@ -62,8 +62,14 @@ function classifyError(err: unknown): 'retryable' | 'permanent' {
     return 'permanent'
   }
 
-  // Retryable: rate limit
-  if (status === 429) return 'retryable'
+  // Permanent: 429 with insufficient_quota is a billing issue, not a rate limit
+  if (status === 429) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes('insufficient_quota')) {
+      return 'permanent'
+    }
+    return 'retryable'
+  }
 
   // Retryable: server errors
   if (status !== undefined && status >= 500) return 'retryable'
@@ -280,6 +286,7 @@ async function preflightCheck(apiKey: string): Promise<boolean> {
     await client.models.list()
     const elapsedMs = Date.now() - startTime
     console.log('[transcription:preflight] SUCCESS (elapsed %dms) — OpenAI API is reachable', elapsedMs)
+    console.log('[transcription:preflight] Note: preflight checks connectivity only, not billing/quota status')
     return true
   } catch (err) {
     const elapsedMs = Date.now() - startTime
@@ -389,7 +396,12 @@ async function transcribeSegmentWithRetry(
       const classification = classifyError(err)
 
       if (classification === 'permanent') {
-        console.error('[transcription:whisper] Step %d: permanent error, not retrying', stepIndex)
+        const errMsg = err instanceof Error ? err.message : String(err)
+        if (errMsg.includes('insufficient_quota')) {
+          console.error('[transcription:whisper] Step %d: insufficient_quota detected — billing issue, not retrying', stepIndex)
+        } else {
+          console.error('[transcription:whisper] Step %d: permanent error, not retrying', stepIndex)
+        }
         throw err
       }
 
