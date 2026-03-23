@@ -1,5 +1,5 @@
 import { join, basename } from 'path'
-import { statSync, unlinkSync } from 'fs'
+import { existsSync, statSync, unlinkSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { BrowserWindow, dialog } from 'electron'
 import ffmpegStatic from 'ffmpeg-static'
@@ -268,18 +268,17 @@ function extractAudioSegment(
 // ── OpenAI client factory ──
 
 function createOpenAIClient(apiKey: string): OpenAI {
+  // Pass globalThis.fetch directly — no wrapper.
+  // Wrapping fetch (even to inject duplex:'half') causes undici to disturb/lock
+  // the body stream when the SDK builds a multipart Request internally.
+  // The SDK handles duplex:'half' on its own for streaming uploads.
   if (typeof globalThis.fetch === 'function') {
-    console.log('[transcription:client] OpenAI client initialized (fetch: globalThis.fetch + duplex:half)')
-    // Wrap fetch to inject duplex:'half' for streaming uploads.
-    // Mutate init in-place instead of spreading to avoid reconstructing
-    // the Request object, which would disturb a locked body stream.
-    const wrappedFetch: typeof globalThis.fetch = (input, init) => {
-      if (init) {
-        (init as Record<string, unknown>).duplex = 'half'
-      }
-      return globalThis.fetch(input, init)
-    }
-    return new OpenAI({ apiKey, timeout: WHISPER_TIMEOUT_MS, fetch: wrappedFetch })
+    console.log('[transcription:client] OpenAI client initialized (fetch: globalThis.fetch, no wrapper)')
+    return new OpenAI({
+      apiKey,
+      timeout: WHISPER_TIMEOUT_MS,
+      fetch: globalThis.fetch.bind(globalThis)
+    })
   }
   console.log('[transcription:client] OpenAI client initialized (fetch: default)')
   return new OpenAI({ apiKey, timeout: WHISPER_TIMEOUT_MS })
@@ -491,6 +490,33 @@ export async function transcribeAllSteps(): Promise<void> {
   const audioPath = state.audioFilePath
   console.log('[transcription] Starting transcription for %d steps', state.steps.length)
   console.log('[transcription] Audio file: %s', audioPath)
+
+  // ── Guard: wait for audio file to exist on disk ──
+  // Recording finalization may still be writing the file when transcribe:start fires.
+  const AUDIO_WAIT_INTERVAL_MS = 250
+  const AUDIO_WAIT_MAX_MS = 10_000
+  let audioWaitedMs = 0
+  while (!existsSync(audioPath)) {
+    if (audioWaitedMs >= AUDIO_WAIT_MAX_MS) {
+      console.error(
+        '[transcription] Audio file not found after waiting %d ms: %s',
+        audioWaitedMs, audioPath
+      )
+      broadcastProgress({
+        stepIndex: 0,
+        total: state.steps.length,
+        status: 'error',
+        message: 'Audio file not found: ' + audioPath
+      })
+      return
+    }
+    console.log('[transcription] Audio file not yet on disk, waiting… (%d ms elapsed)', audioWaitedMs)
+    await sleep(AUDIO_WAIT_INTERVAL_MS)
+    audioWaitedMs += AUDIO_WAIT_INTERVAL_MS
+  }
+  if (audioWaitedMs > 0) {
+    console.log('[transcription] Audio file appeared after %d ms', audioWaitedMs)
+  }
 
   // ── Preflight: verify API key and connectivity ──
 
