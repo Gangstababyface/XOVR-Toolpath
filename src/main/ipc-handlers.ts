@@ -210,8 +210,15 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
     }
     console.log('[capture] Effective timestamp: %d ms', effectiveTimestamp)
 
-    // Step 2 — capture screenshot from the recorded source at native resolution
-    // Use 8K max to never downscale any consumer display
+    // Step 2 — hide toolbar so it doesn't appear in the screenshot
+    if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+      toolbarWindow.hide()
+    }
+
+    // Brief delay to let the window fully disappear from the compositor
+    await new Promise((r) => setTimeout(r, 100))
+
+    // Capture screenshot from the recorded source at native resolution
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width: 7680, height: 4320 }
@@ -253,6 +260,11 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
     const jpegBuffer = screenshot.toJPEG(80)
     await writeFile(screenshotPath, jpegBuffer)
     console.log('[capture] Screenshot saved: %s (%d bytes, %dx%d)', screenshotPath, jpegBuffer.length, imgWidth, imgHeight)
+
+    // Show toolbar again after screenshot is captured
+    if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+      toolbarWindow.show()
+    }
 
     // Step 5 — prepare overlay data
     const screenshotDataUrl = `data:image/jpeg;base64,${jpegBuffer.toString('base64')}`

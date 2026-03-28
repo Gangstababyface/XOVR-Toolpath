@@ -50,6 +50,7 @@ function Toolbar(): JSX.Element {
 
   return (
     <div
+      className="toolbar-drag"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -58,8 +59,14 @@ function Toolbar(): JSX.Element {
         fontFamily: 'system-ui, sans-serif'
       }}
     >
+      <style>{`
+        .toolbar-drag { -webkit-app-region: drag; app-region: drag; }
+        .toolbar-no-drag { -webkit-app-region: no-drag; app-region: no-drag; }
+        button { -webkit-app-region: no-drag; app-region: no-drag; }
+      `}</style>
       {/* Main toolbar row */}
       <div
+        className="toolbar-drag"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -67,9 +74,8 @@ function Toolbar(): JSX.Element {
           padding: '0 20px',
           flex: 1,
           color: '#fff',
-          WebkitAppRegion: 'drag',
           userSelect: 'none'
-        } as React.CSSProperties}
+        }}
       >
         {/* Recording indicator dot */}
         <div
@@ -101,12 +107,12 @@ function Toolbar(): JSX.Element {
 
         {/* Controls — must be no-drag so buttons work */}
         <div
+          className="toolbar-no-drag"
           style={{
             display: 'flex',
             gap: 8,
-            marginLeft: 'auto',
-            WebkitAppRegion: 'no-drag'
-          } as React.CSSProperties}
+            marginLeft: 'auto'
+          }}
         >
           <button
             onClick={() => window.api.captureMarkStep()}
