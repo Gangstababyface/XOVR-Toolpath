@@ -38,6 +38,30 @@ const api = {
   overlayResult: (data: { rect: Rect | null }): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.OVERLAY_RESULT, data),
 
+  // Hotkey status
+  onHotkeyStatus: (
+    callback: (data: { registered: boolean }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { registered: boolean }
+    ): void => {
+      callback(data)
+    }
+    ipcRenderer.on('hotkey:status', handler)
+    return () => {
+      ipcRenderer.removeListener('hotkey:status', handler)
+    }
+  },
+
+  // Screenshots
+  screenshotLoad: (filePath: string): Promise<string | null> =>
+    ipcRenderer.invoke(IpcChannels.SCREENSHOT_LOAD, filePath),
+
+  // Step editing
+  stepUpdateText: (data: { stepId: string; editedText: string }): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.STEP_UPDATE_TEXT, data),
+
   // Transcription
   transcribeStart: (): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.TRANSCRIBE_START),
@@ -67,12 +91,40 @@ const api = {
   },
 
   // Claude AI
-  claudeQuestions: (data: { stepId: string }): Promise<unknown> =>
+  claudeQuestions: (data: { stepId: string }): Promise<string[]> =>
     ipcRenderer.invoke(IpcChannels.CLAUDE_QUESTIONS, data),
   claudeRewrite: (data: {
     stepId: string
     answers?: Record<string, string>
-  }): Promise<unknown> => ipcRenderer.invoke(IpcChannels.CLAUDE_REWRITE, data),
+  }): Promise<string> => ipcRenderer.invoke(IpcChannels.CLAUDE_REWRITE, data),
+  claudeBatchRewrite: (): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.CLAUDE_BATCH_REWRITE),
+  onClaudeProgress: (
+    callback: (progress: {
+      type: 'batch'
+      stepIndex: number
+      total: number
+      status: 'rewriting' | 'done' | 'error'
+      message?: string
+    }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      progress: {
+        type: 'batch'
+        stepIndex: number
+        total: number
+        status: 'rewriting' | 'done' | 'error'
+        message?: string
+      }
+    ): void => {
+      callback(progress)
+    }
+    ipcRenderer.on(IpcChannels.CLAUDE_PROGRESS, handler)
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.CLAUDE_PROGRESS, handler)
+    }
+  },
 
   // Export
   exportRun: (data: {

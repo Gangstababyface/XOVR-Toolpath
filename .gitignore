@@ -3,3 +3,4 @@ out/
 dist/
 *.env
 .env.*
+- Copy.env.txt

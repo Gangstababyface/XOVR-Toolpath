@@ -23,6 +23,8 @@ export const IpcChannels = {
   // Claude AI
   CLAUDE_QUESTIONS: 'claude:questions',
   CLAUDE_REWRITE: 'claude:rewrite',
+  CLAUDE_BATCH_REWRITE: 'claude:batch-rewrite',
+  CLAUDE_PROGRESS: 'claude:progress',
 
   // Export
   EXPORT_RUN: 'export:run',
@@ -37,6 +39,12 @@ export const IpcChannels = {
   // State synchronization
   STATE_SUBSCRIBE: 'state:subscribe',
   STATE_UPDATE: 'state:update',
+
+  // Screenshots
+  SCREENSHOT_LOAD: 'screenshot:load',
+
+  // Step editing
+  STEP_UPDATE_TEXT: 'step:update-text',
 
   // Settings
   SETTINGS_GET: 'settings:get',

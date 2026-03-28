@@ -243,6 +243,11 @@ export function useMediaCapture(): MediaCaptureControls {
       audio: audioBuffer
     })
 
+    // Kick off transcription (fire-and-forget — progress comes via IPC)
+    window.api.transcribeStart().catch((err) => {
+      console.error('[capture] transcribeStart failed:', err)
+    })
+
     videoChunksRef.current = []
     audioChunksRef.current = []
     videoRecorderRef.current = null

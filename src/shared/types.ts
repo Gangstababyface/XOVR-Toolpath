@@ -52,3 +52,10 @@ export interface AutosaveSnapshot {
   savedAt: string
   session: RecordingSessionState
 }
+
+export interface TranscriptionProgress {
+  stepIndex: number
+  total: number
+  status: 'extracting' | 'transcribing' | 'done' | 'error'
+  message?: string
+}

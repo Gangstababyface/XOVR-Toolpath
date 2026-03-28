@@ -2,13 +2,14 @@ import { BrowserWindow, desktopCapturer, ipcMain, screen } from 'electron'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { mkdirSync } from 'fs'
-import { writeFile, rm } from 'fs/promises'
+import { writeFile, rm, readFile } from 'fs/promises'
 import { v4 as uuidv4 } from 'uuid'
 import { IpcChannels } from '../shared/ipc-channels'
 import type { Rect, Step } from '../shared/types'
 import * as stateBus from './state-bus'
 import { registerHotkeys, unregisterHotkeys } from './hotkeys'
 import { transcribeAllSteps } from './transcription'
+import { generateQuestions, rewriteStep, batchRewriteAll } from './claude'
 
 let toolbarWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -86,11 +87,12 @@ function createToolbarWindow(): void {
   if (toolbarWindow && !toolbarWindow.isDestroyed()) return
 
   toolbarWindow = new BrowserWindow({
-    width: 360,
-    height: 72,
+    width: 420,
+    height: 90,
     frame: false,
     alwaysOnTop: true,
     resizable: false,
+    movable: true,
     skipTaskbar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
@@ -98,6 +100,9 @@ function createToolbarWindow(): void {
       nodeIntegration: false
     }
   })
+
+  // Stay above fullscreen windows on Windows
+  toolbarWindow.setAlwaysOnTop(true, 'screen-saver')
 
   if (process.env.ELECTRON_RENDERER_URL) {
     toolbarWindow.loadURL(process.env.ELECTRON_RENDERER_URL + '#toolbar')
@@ -413,13 +418,67 @@ export function registerIpcHandlers(): void {
     await transcribeAllSteps()
   })
 
+  // ── Screenshots ──
+
+  ipcMain.handle(IpcChannels.SCREENSHOT_LOAD, async (_event, filePath: string) => {
+    try {
+      const buffer = await readFile(filePath)
+      const ext = filePath.toLowerCase().endsWith('.png') ? 'png' : 'jpeg'
+      return `data:image/${ext};base64,${buffer.toString('base64')}`
+    } catch (err) {
+      console.error('[ipc] screenshot:load failed for %s:', filePath, err)
+      return null
+    }
+  })
+
+  // ── Step editing ──
+
+  ipcMain.handle(
+    IpcChannels.STEP_UPDATE_TEXT,
+    async (_event, data: { stepId: string; editedText: string }) => {
+      stateBus.updateStepText(data.stepId, data.editedText)
+    }
+  )
+
   // ── Claude AI — Phase 6 ──
 
-  ipcMain.handle(IpcChannels.CLAUDE_QUESTIONS, async (_event, _data) => {
-    // TODO: Phase 6
+  ipcMain.handle(IpcChannels.CLAUDE_QUESTIONS, async (_event, data: { stepId: string }) => {
+    const state = stateBus.getState()
+    const step = state.steps.find((s) => s.id === data.stepId)
+    if (!step) throw new Error(`Step not found: ${data.stepId}`)
+
+    const questions = await generateQuestions(step, state.steps)
+    // Store questions as QAPairs with empty answers
+    const qaPairs = questions.map((q) => ({ question: q, answer: '' }))
+    stateBus.updateStepQuestions(data.stepId, qaPairs)
+    return questions
   })
-  ipcMain.handle(IpcChannels.CLAUDE_REWRITE, async (_event, _data) => {
-    // TODO: Phase 6
+
+  ipcMain.handle(
+    IpcChannels.CLAUDE_REWRITE,
+    async (_event, data: { stepId: string; answers?: Record<string, string> }) => {
+      const state = stateBus.getState()
+      const step = state.steps.find((s) => s.id === data.stepId)
+      if (!step) throw new Error(`Step not found: ${data.stepId}`)
+
+      // Build QAPairs from answers
+      const qaPairs = step.claudeQuestions.map((qa) => ({
+        question: qa.question,
+        answer: data.answers?.[qa.question] || qa.answer
+      }))
+
+      // Update stored Q&A with answers
+      stateBus.updateStepQuestions(data.stepId, qaPairs)
+
+      const rewrittenText = await rewriteStep(step, state.steps, qaPairs)
+      stateBus.updateStepRewrite(data.stepId, rewrittenText, 'interactive')
+      return rewrittenText
+    }
+  )
+
+  ipcMain.handle(IpcChannels.CLAUDE_BATCH_REWRITE, async () => {
+    console.log('[ipc] claude:batch-rewrite')
+    await batchRewriteAll()
   })
 
   // ── Export — Phase 7 ──

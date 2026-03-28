@@ -110,6 +110,40 @@ export function updateStepTranscript(stepId: string, rawTranscript: string): voi
   broadcast()
 }
 
+export function updateStepQuestions(stepId: string, questions: import('../shared/types').QAPair[]): void {
+  state = {
+    ...state,
+    steps: state.steps.map((s) =>
+      s.id === stepId ? { ...s, claudeQuestions: questions } : s
+    )
+  }
+  broadcast()
+}
+
+export function updateStepRewrite(stepId: string, editedText: string, rewriteSource: 'batch' | 'interactive'): void {
+  state = {
+    ...state,
+    steps: state.steps.map((s) =>
+      s.id === stepId
+        ? { ...s, editedText, rewriteStatus: 'ai_rewritten' as const, rewriteSource }
+        : s
+    )
+  }
+  broadcast()
+}
+
+export function updateStepText(stepId: string, editedText: string): void {
+  state = {
+    ...state,
+    steps: state.steps.map((s) =>
+      s.id === stepId
+        ? { ...s, editedText, rewriteStatus: 'manually_edited' as const }
+        : s
+    )
+  }
+  broadcast()
+}
+
 export function setCaptureQueueSize(size: number): void {
   state = { ...state, activeCaptureQueue: size }
   broadcast()

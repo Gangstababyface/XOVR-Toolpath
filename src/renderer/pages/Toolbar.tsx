@@ -14,6 +14,17 @@ function Toolbar(): JSX.Element {
   const pauseStartedAt = useRecordingStore((s) => s.pauseStartedAt)
 
   const [elapsed, setElapsed] = useState('00:00')
+  const [hotkeyOk, setHotkeyOk] = useState(true)
+
+  // Listen for hotkey registration status
+  useEffect(() => {
+    const handler = (_event: unknown, data: { registered: boolean }) => {
+      setHotkeyOk(data.registered)
+    }
+    // @ts-expect-error onHotkeyStatus not in typed API
+    const cleanup = window.api.onHotkeyStatus?.(handler)
+    return () => cleanup?.()
+  }, [])
 
   useEffect(() => {
     if (!isRecording || sessionStartTime === null) return
@@ -41,74 +52,104 @@ function Toolbar(): JSX.Element {
     <div
       style={{
         display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '0 20px',
+        flexDirection: 'column',
         height: '100%',
-        boxSizing: 'border-box',
         backgroundColor: '#1a1a2e',
-        color: '#fff',
-        fontFamily: 'system-ui, sans-serif',
-        WebkitAppRegion: 'drag',
-        userSelect: 'none'
-      } as React.CSSProperties}
+        fontFamily: 'system-ui, sans-serif'
+      }}
     >
-      {/* Recording indicator dot */}
-      <div
-        style={{
-          width: 12,
-          height: 12,
-          borderRadius: '50%',
-          backgroundColor: isPaused ? '#f59e0b' : '#ef4444',
-          flexShrink: 0
-        }}
-      />
-
-      {/* Status label */}
-      <span style={{ fontSize: 13, fontWeight: 600, minWidth: 52 }}>
-        {isPaused ? 'PAUSED' : 'REC'}
-      </span>
-
-      {/* Timer */}
-      <span
-        style={{
-          fontSize: 18,
-          fontFamily: 'monospace',
-          fontWeight: 600,
-          minWidth: 56
-        }}
-      >
-        {elapsed}
-      </span>
-
-      {/* Controls — must be no-drag so buttons work */}
+      {/* Main toolbar row */}
       <div
         style={{
           display: 'flex',
-          gap: 8,
-          marginLeft: 'auto',
-          WebkitAppRegion: 'no-drag'
+          alignItems: 'center',
+          gap: 12,
+          padding: '0 20px',
+          flex: 1,
+          color: '#fff',
+          WebkitAppRegion: 'drag',
+          userSelect: 'none'
         } as React.CSSProperties}
       >
-        {isPaused ? (
-          <button
-            onClick={() => window.api.recordingResume()}
-            style={btnStyle}
-          >
-            Resume
-          </button>
-        ) : (
-          <button onClick={() => window.api.recordingPause()} style={btnStyle}>
-            Pause
-          </button>
-        )}
-        <button
-          onClick={() => window.api.recordingStop()}
-          style={{ ...btnStyle, backgroundColor: '#ef4444' }}
+        {/* Recording indicator dot */}
+        <div
+          style={{
+            width: 12,
+            height: 12,
+            borderRadius: '50%',
+            backgroundColor: isPaused ? '#f59e0b' : '#ef4444',
+            flexShrink: 0
+          }}
+        />
+
+        {/* Status label */}
+        <span style={{ fontSize: 13, fontWeight: 600, minWidth: 52 }}>
+          {isPaused ? 'PAUSED' : 'REC'}
+        </span>
+
+        {/* Timer */}
+        <span
+          style={{
+            fontSize: 18,
+            fontFamily: 'monospace',
+            fontWeight: 600,
+            minWidth: 56
+          }}
         >
-          Stop
-        </button>
+          {elapsed}
+        </span>
+
+        {/* Controls — must be no-drag so buttons work */}
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            marginLeft: 'auto',
+            WebkitAppRegion: 'no-drag'
+          } as React.CSSProperties}
+        >
+          <button
+            onClick={() => window.api.captureMarkStep()}
+            style={{ ...btnStyle, backgroundColor: '#2563eb' }}
+            title="Mark Step (Ctrl+Shift+S)"
+          >
+            + Step
+          </button>
+          {isPaused ? (
+            <button
+              onClick={() => window.api.recordingResume()}
+              style={btnStyle}
+            >
+              Resume
+            </button>
+          ) : (
+            <button onClick={() => window.api.recordingPause()} style={btnStyle}>
+              Pause
+            </button>
+          )}
+          <button
+            onClick={() => window.api.recordingStop()}
+            style={{ ...btnStyle, backgroundColor: '#ef4444' }}
+          >
+            Stop
+          </button>
+        </div>
       </div>
+
+      {/* Hotkey warning bar */}
+      {!hotkeyOk && (
+        <div
+          style={{
+            padding: '3px 20px',
+            backgroundColor: '#92400e',
+            color: '#fef3c7',
+            fontSize: 11,
+            textAlign: 'center'
+          }}
+        >
+          Ctrl+Shift+S unavailable — use the "+ Step" button
+        </div>
+      )}
     </div>
   )
 }

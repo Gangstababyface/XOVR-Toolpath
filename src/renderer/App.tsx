@@ -1,17 +1,29 @@
 import {
   useRecordingStore,
-  useInitRecordingStore
+  useInitRecordingStore,
+  useInitTranscriptionListener
 } from './stores/recordingStore'
 import { useMediaCapture } from './hooks/useMediaCapture'
 import Toolbar from './pages/Toolbar'
 import SelectionOverlay from './pages/SelectionOverlay'
+import TranscriptionProgress from './components/TranscriptionProgress'
+import EditPage from './pages/EditPage'
 
 function MainView(): JSX.Element {
   useInitRecordingStore()
+  useInitTranscriptionListener()
   const { isStarting, startError, startRecording, cancelStart, clearStartError } =
     useMediaCapture()
 
   const isRecording = useRecordingStore((s) => s.isRecording)
+  const steps = useRecordingStore((s) => s.steps)
+  const view = useRecordingStore((s) => s.view)
+
+  if (view === 'edit' && steps.length > 0) {
+    return <EditPage />
+  }
+
+  const hasCompletedSession = !isRecording && !isStarting && steps.length > 0
 
   return (
     <div style={{ padding: 32, fontFamily: 'system-ui, sans-serif' }}>
@@ -50,6 +62,8 @@ function MainView(): JSX.Element {
 
       {isRecording ? (
         <p>Recording in progress. Use the toolbar to pause or stop.</p>
+      ) : hasCompletedSession ? (
+        <TranscriptionProgress />
       ) : isStarting ? (
         <div>
           <p>Acquiring capture sources...</p>
