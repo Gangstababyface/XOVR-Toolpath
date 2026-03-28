@@ -9,6 +9,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { IpcChannels } from '../shared/ipc-channels'
 import type { Step, QAPair, Rect } from '../shared/types'
 import * as stateBus from './state-bus'
+import { getApiKey, getAnthropicModel } from './settings'
 
 if (ffmpegStatic) {
   ffmpeg.setFfmpegPath(ffmpegStatic)
@@ -23,7 +24,7 @@ const DEFAULT_MODEL = 'claude-sonnet-4-20250514'
 // ── Helpers ──
 
 function getModel(): string {
-  return process.env.ANTHROPIC_MODEL || DEFAULT_MODEL
+  return getAnthropicModel()
 }
 
 function sleep(ms: number): Promise<void> {
@@ -83,9 +84,9 @@ async function annotateScreenshot(
 // ── Anthropic client ──
 
 function createClient(): Anthropic {
-  const apiKey = process.env.ANTHROPIC_API_KEY
+  const apiKey = getApiKey('anthropic')
   if (!apiKey) {
-    throw new Error('ANTHROPIC_API_KEY is not set')
+    throw new Error('Anthropic API key is not configured. Set ANTHROPIC_API_KEY or enter it in Settings.')
   }
   return new Anthropic({ apiKey })
 }

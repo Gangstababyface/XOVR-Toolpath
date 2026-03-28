@@ -2,10 +2,11 @@ import { create } from 'zustand'
 import { useEffect } from 'react'
 import type { RecordingSessionState, TranscriptionProgress } from '../../shared/types'
 
-type AppView = 'home' | 'edit'
+type AppView = 'home' | 'edit' | 'settings'
 
 interface RecordingStoreState extends RecordingSessionState {
   view: AppView
+  projectFilePath: string | null
   transcription: TranscriptionProgress | null
   isTranscribing: boolean
   transcriptionComplete: boolean
@@ -25,6 +26,7 @@ const initialState: RecordingStoreState = {
   videoFilePath: null,
   sessionDir: null,
   view: 'home',
+  projectFilePath: null,
   transcription: null,
   isTranscribing: false,
   transcriptionComplete: false,

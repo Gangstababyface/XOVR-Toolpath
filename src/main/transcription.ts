@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { IpcChannels } from '../shared/ipc-channels'
 import type { Step } from '../shared/types'
 import * as stateBus from './state-bus'
+import { getApiKey } from './settings'
 
 // ── FFmpeg / FFprobe paths ──
 
@@ -494,14 +495,14 @@ export async function transcribeAllSteps(): Promise<void> {
 
   // ── Preflight: verify API key and connectivity ──
 
-  const apiKey = process.env.OPENAI_API_KEY
+  const apiKey = getApiKey('openai')
   if (!apiKey) {
-    console.error('[transcription] OPENAI_API_KEY is not set — aborting')
+    console.error('[transcription] OpenAI API key is not configured — aborting')
     broadcastProgress({
       stepIndex: 0,
       total: state.steps.length,
       status: 'error',
-      message: 'OPENAI_API_KEY environment variable is not set'
+      message: 'OpenAI API key is not configured. Set OPENAI_API_KEY or enter it in Settings.'
     })
     return
   }

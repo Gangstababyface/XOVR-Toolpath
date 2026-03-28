@@ -1,6 +1,25 @@
 import { BrowserWindow } from 'electron'
 import { IpcChannels } from '../shared/ipc-channels'
-import type { RecordingSessionState } from '../shared/types'
+import type { RecordingSessionState, Step } from '../shared/types'
+
+// ── Change callbacks for autosave etc. ──
+
+type StateChangeCallback = () => void
+const changeCallbacks: StateChangeCallback[] = []
+
+export function onStateChange(cb: StateChangeCallback): () => void {
+  changeCallbacks.push(cb)
+  return () => {
+    const idx = changeCallbacks.indexOf(cb)
+    if (idx >= 0) changeCallbacks.splice(idx, 1)
+  }
+}
+
+function notifyChangeCallbacks(): void {
+  for (const cb of changeCallbacks) {
+    try { cb() } catch (err) { console.error('[state-bus] change callback error:', err) }
+  }
+}
 
 function createInitialState(): RecordingSessionState {
   return {
@@ -31,6 +50,7 @@ function broadcast(): void {
       win.webContents.send(IpcChannels.STATE_UPDATE, data)
     }
   }
+  notifyChangeCallbacks()
 }
 
 export function getState(): RecordingSessionState {
@@ -154,6 +174,15 @@ export function setMediaPaths(videoPath: string, audioPath: string): void {
     ...state,
     videoFilePath: videoPath,
     audioFilePath: audioPath
+  }
+  broadcast()
+}
+
+export function loadProjectState(steps: Step[], sessionDir: string | null): void {
+  state = {
+    ...createInitialState(),
+    steps,
+    sessionDir
   }
   broadcast()
 }

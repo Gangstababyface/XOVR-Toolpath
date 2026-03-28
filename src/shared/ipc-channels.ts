@@ -48,7 +48,12 @@ export const IpcChannels = {
 
   // Settings
   SETTINGS_GET: 'settings:get',
-  SETTINGS_SAVE: 'settings:save'
+  SETTINGS_SAVE: 'settings:save',
+
+  // Autosave / recovery
+  AUTOSAVE_CHECK: 'autosave:check',
+  AUTOSAVE_RESTORE: 'autosave:restore',
+  AUTOSAVE_DISCARD: 'autosave:discard'
 } as const
 
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]

@@ -1,4 +1,4 @@
-import { BrowserWindow, desktopCapturer, ipcMain, screen } from 'electron'
+import { BrowserWindow, desktopCapturer, dialog, ipcMain, screen } from 'electron'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { mkdirSync } from 'fs'
@@ -10,6 +10,9 @@ import * as stateBus from './state-bus'
 import { registerHotkeys, unregisterHotkeys } from './hotkeys'
 import { transcribeAllSteps } from './transcription'
 import { generateQuestions, rewriteStep, batchRewriteAll } from './claude'
+import * as settings from './settings'
+import { saveProject, loadProject, exportMarkdown, exportHtml, exportPdf } from './export'
+import { checkForRecoverableAutosave, discardAutosave, markClean } from './autosave'
 
 let toolbarWindow: BrowserWindow | null = null
 let overlayWindow: BrowserWindow | null = null
@@ -483,17 +486,61 @@ export function registerIpcHandlers(): void {
 
   // ── Export — Phase 7 ──
 
-  ipcMain.handle(IpcChannels.EXPORT_RUN, async (_event, _data) => {
-    // TODO: Phase 7
+  ipcMain.handle(IpcChannels.EXPORT_RUN, async (_event, data: { format: 'markdown' | 'html' | 'pdf'; outputPath?: string }) => {
+    let outputPath = data.outputPath
+    if (!outputPath) {
+      const filters: Record<string, Electron.FileFilter[]> = {
+        markdown: [{ name: 'Markdown', extensions: ['md'] }],
+        html: [{ name: 'HTML', extensions: ['html'] }],
+        pdf: [{ name: 'PDF', extensions: ['pdf'] }]
+      }
+      const result = await dialog.showSaveDialog({
+        title: `Export as ${data.format.toUpperCase()}`,
+        defaultPath: `xovr-toolpath.${data.format === 'markdown' ? 'md' : data.format}`,
+        filters: filters[data.format]
+      })
+      if (result.canceled || !result.filePath) return
+      outputPath = result.filePath
+    }
+
+    if (data.format === 'markdown') await exportMarkdown(outputPath)
+    else if (data.format === 'html') await exportHtml(outputPath)
+    else if (data.format === 'pdf') await exportPdf(outputPath)
   })
 
   // ── File operations — Phase 7 ──
 
-  ipcMain.handle(IpcChannels.FILE_SAVE_PROJECT, async (_event, _data) => {
-    // TODO: Phase 7
+  ipcMain.handle(IpcChannels.FILE_SAVE_PROJECT, async (_event, data?: { filePath?: string }) => {
+    let filePath = data?.filePath
+    if (!filePath) {
+      const result = await dialog.showSaveDialog({
+        title: 'Save Project',
+        defaultPath: 'project.xtoolpath',
+        filters: [{ name: 'XOVR Toolpath Project', extensions: ['xtoolpath'] }]
+      })
+      if (result.canceled || !result.filePath) return null
+      filePath = result.filePath
+    }
+    await saveProject(filePath)
+    settings.saveSettings({ lastProjectPath: filePath })
+    markClean()
+    return filePath
   })
-  ipcMain.handle(IpcChannels.FILE_LOAD_PROJECT, async (_event, _data) => {
-    // TODO: Phase 7
+  ipcMain.handle(IpcChannels.FILE_LOAD_PROJECT, async (_event, data?: { filePath?: string }) => {
+    let filePath = data?.filePath
+    if (!filePath) {
+      const result = await dialog.showOpenDialog({
+        title: 'Open Project',
+        filters: [{ name: 'XOVR Toolpath Project', extensions: ['xtoolpath'] }],
+        properties: ['openFile']
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+      filePath = result.filePaths[0]
+    }
+    const project = await loadProject(filePath)
+    stateBus.loadProjectState(project.steps, null)
+    settings.saveSettings({ lastProjectPath: filePath })
+    return filePath
   })
 
   // ── State synchronization — Phase 2 ──
@@ -505,9 +552,28 @@ export function registerIpcHandlers(): void {
   // ── Settings — Phase 7 ──
 
   ipcMain.handle(IpcChannels.SETTINGS_GET, async () => {
-    // TODO: Phase 7
+    return settings.getSettings()
   })
-  ipcMain.handle(IpcChannels.SETTINGS_SAVE, async (_event, _data) => {
-    // TODO: Phase 7
+  ipcMain.handle(IpcChannels.SETTINGS_SAVE, async (_event, data) => {
+    settings.saveSettings(data)
+  })
+
+  // ── Autosave / recovery — Phase 7 ──
+
+  ipcMain.handle(IpcChannels.AUTOSAVE_CHECK, async () => {
+    return checkForRecoverableAutosave()
+  })
+  ipcMain.handle(IpcChannels.AUTOSAVE_RESTORE, async () => {
+    const snapshot = checkForRecoverableAutosave()
+    if (snapshot) {
+      stateBus.loadProjectState(snapshot.session.steps, snapshot.session.sessionDir)
+      discardAutosave()
+      markClean()
+      return true
+    }
+    return false
+  })
+  ipcMain.handle(IpcChannels.AUTOSAVE_DISCARD, async () => {
+    discardAutosave()
   })
 }

@@ -1,8 +1,9 @@
 import 'dotenv/config'
-import { app, BrowserWindow, session, desktopCapturer } from 'electron'
+import { app, BrowserWindow, dialog, session, desktopCapturer } from 'electron'
 import { join } from 'path'
 import { registerIpcHandlers } from './ipc-handlers'
 import * as stateBus from './state-bus'
+import { startAutosaveTimer, stopAutosaveTimer, triggerAutosave, getIsDirty, markClean } from './autosave'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -29,6 +30,29 @@ function createMainWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  mainWindow.on('close', (event) => {
+    if (getIsDirty()) {
+      const choice = dialog.showMessageBoxSync(mainWindow!, {
+        type: 'warning',
+        buttons: ['Save', "Don't Save", 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        title: 'Unsaved Changes',
+        message: 'You have unsaved changes. Do you want to save before closing?'
+      })
+      if (choice === 0) {
+        // Save — trigger synchronous autosave then close
+        triggerAutosave()
+        markClean()
+      } else if (choice === 2) {
+        // Cancel
+        event.preventDefault()
+        return
+      }
+      // choice === 1 — Don't Save — just close
+    }
+  })
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -64,10 +88,12 @@ app.whenReady().then(() => {
   setupDisplayMediaHandler()
   registerIpcHandlers()
   createMainWindow()
+  startAutosaveTimer()
   console.log('[main] App ready, main window created')
 })
 
 app.on('window-all-closed', () => {
+  stopAutosaveTimer()
   app.quit()
 })
 

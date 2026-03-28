@@ -129,13 +129,13 @@ const api = {
   // Export
   exportRun: (data: {
     format: 'markdown' | 'html' | 'pdf'
-    outputPath: string
+    outputPath?: string
   }): Promise<void> => ipcRenderer.invoke(IpcChannels.EXPORT_RUN, data),
 
   // File operations
-  fileSaveProject: (data: { filePath: string }): Promise<void> =>
+  fileSaveProject: (data?: { filePath?: string }): Promise<string | null> =>
     ipcRenderer.invoke(IpcChannels.FILE_SAVE_PROJECT, data),
-  fileLoadProject: (data: { filePath: string }): Promise<unknown> =>
+  fileLoadProject: (data?: { filePath?: string }): Promise<string | null> =>
     ipcRenderer.invoke(IpcChannels.FILE_LOAD_PROJECT, data),
 
   // State synchronization
@@ -160,7 +160,15 @@ const api = {
   settingsGet: (): Promise<unknown> =>
     ipcRenderer.invoke(IpcChannels.SETTINGS_GET),
   settingsSave: (data: Record<string, unknown>): Promise<void> =>
-    ipcRenderer.invoke(IpcChannels.SETTINGS_SAVE, data)
+    ipcRenderer.invoke(IpcChannels.SETTINGS_SAVE, data),
+
+  // Autosave / recovery
+  autosaveCheck: (): Promise<unknown> =>
+    ipcRenderer.invoke(IpcChannels.AUTOSAVE_CHECK),
+  autosaveRestore: (): Promise<boolean> =>
+    ipcRenderer.invoke(IpcChannels.AUTOSAVE_RESTORE),
+  autosaveDiscard: (): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.AUTOSAVE_DISCARD)
 }
 
 contextBridge.exposeInMainWorld('api', api)

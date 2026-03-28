@@ -1,13 +1,16 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { useRecordingStore } from '../stores/recordingStore'
 import StepCard from '../components/StepCard'
 import ClaudeChat from '../components/ClaudeChat'
 
 function EditPage(): JSX.Element {
   const steps = useRecordingStore((s) => s.steps)
+  const projectFilePath = useRecordingStore((s) => s.projectFilePath)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [batchRunning, setBatchRunning] = useState(false)
   const [rewriteTrigger, setRewriteTrigger] = useState(0)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const exportRef = useRef<HTMLDivElement>(null)
 
   const selectedStep = steps[selectedIndex] ?? null
 
@@ -61,23 +64,49 @@ function EditPage(): JSX.Element {
           Step {selectedIndex + 1} of {steps.length}
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          <div ref={exportRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => setExportMenuOpen((v) => !v)}
+              style={topBarBtn}
+            >
+              Export
+            </button>
+            {exportMenuOpen && (
+              <div style={dropdownStyle}>
+                {(['markdown', 'html', 'pdf'] as const).map((fmt) => (
+                  <button
+                    key={fmt}
+                    onClick={async () => {
+                      setExportMenuOpen(false)
+                      try { await window.api.exportRun({ format: fmt }) }
+                      catch (err) { console.error('[EditPage] Export failed:', err) }
+                    }}
+                    style={dropdownItemStyle}
+                  >
+                    {fmt.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
-            onClick={() => {
-              // Phase 7 — export
-              console.log('[EditPage] Export clicked')
-            }}
-            style={topBarBtn}
-          >
-            Export
-          </button>
-          <button
-            onClick={() => {
-              // Phase 7 — save
-              console.log('[EditPage] Save clicked')
+            onClick={async () => {
+              try {
+                const path = await window.api.fileSaveProject(
+                  projectFilePath ? { filePath: projectFilePath } : undefined
+                )
+                if (path) useRecordingStore.setState({ projectFilePath: path })
+              } catch (err) { console.error('[EditPage] Save failed:', err) }
             }}
             style={topBarBtn}
           >
             Save Project
+          </button>
+          <button
+            onClick={() => useRecordingStore.setState({ view: 'settings' })}
+            style={topBarBtn}
+          >
+            Settings
           </button>
         </div>
       </div>
@@ -266,6 +295,31 @@ const bottomBtn: React.CSSProperties = {
   border: '1px solid #d1d5db',
   borderRadius: 5,
   cursor: 'pointer'
+}
+
+const dropdownStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '100%',
+  right: 0,
+  marginTop: 4,
+  backgroundColor: '#fff',
+  border: '1px solid #d1d5db',
+  borderRadius: 4,
+  boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+  zIndex: 10,
+  minWidth: 120
+}
+
+const dropdownItemStyle: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  padding: '8px 14px',
+  fontSize: 13,
+  border: 'none',
+  backgroundColor: 'transparent',
+  cursor: 'pointer',
+  textAlign: 'left',
+  color: '#374151'
 }
 
 export default EditPage
