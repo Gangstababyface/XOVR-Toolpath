@@ -143,17 +143,19 @@ function generateHtml(steps: Step[]): string {
         )
       : ''
 
-    // For cropped images, use SVG to clip the image to the crop region
     let imgHtml = ''
     if (imgSrc && crop && imgWidth > 0) {
-      const cropPct = {
-        left: (crop.x / imgWidth) * 100,
-        top: (crop.y / imgHeight) * 100,
-        right: ((imgWidth - crop.x - crop.width) / imgWidth) * 100,
-        bottom: ((imgHeight - crop.y - crop.height) / imgHeight) * 100
-      }
-      imgHtml = `<div class="img-container">
-        <img src="${imgSrc}" alt="${escapeHtml(stepTitle)}" style="object-fit: cover; object-position: ${-cropPct.left}% ${-cropPct.top}%; clip-path: inset(${cropPct.top}% ${cropPct.right}% ${cropPct.bottom}% ${cropPct.left}%); max-width: none; width: 100%;" />
+      // Cropped: use overflow:hidden wrapper with offset image
+      // Scale crop to fit max 800px wide for export
+      const scale = Math.min(1, 800 / crop.width)
+      const dispW = Math.round(crop.width * scale)
+      const dispH = Math.round(crop.height * scale)
+      const fullW = Math.round(imgWidth * scale)
+      const fullH = Math.round(imgHeight * scale)
+      const offX = Math.round(crop.x * scale)
+      const offY = Math.round(crop.y * scale)
+      imgHtml = `<div class="img-container" style="position:relative;overflow:hidden;width:${dispW}px;height:${dispH}px;">
+        <img src="${imgSrc}" alt="${escapeHtml(stepTitle)}" style="position:absolute;top:${-offY}px;left:${-offX}px;width:${fullW}px;height:${fullH}px;max-width:none;max-height:none;" />
         ${selectionOverlay}
       </div>`
     } else if (imgSrc) {
