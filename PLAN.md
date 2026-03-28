@@ -553,9 +553,143 @@ Also implement:
 
 ---
 
-## Phase 8: Polish + Edge Cases
+## Phase 8: Editable Titles + Document Preview + Claude Document Review
 
-### Agent 11 — Integration Hardening
+### Agent 11 — Editable Step Titles
+
+```text
+Add a user-editable title to each step.
+
+DATA MODEL (src/shared/types.ts):
+- Add to Step interface:
+  - title: string (default "Step {index}")
+  - titleManuallyEdited: boolean (default false)
+
+AUTO-TITLE:
+- After Whisper transcription completes for a step, auto-generate title from first 6-8 words
+- Only if titleManuallyEdited is false
+- Regenerate on transcript update if still not manually edited
+
+EDIT UI:
+- Inline-editable text field above screenshot in EditPage/StepCard
+- Click to edit, Enter or blur to save
+- Larger font, bold, visually distinct from description
+- Controlled input with local state, flush to Zustand on blur/Enter
+- Tab moves focus to next step's title
+
+EXPORTS:
+- All export formats render title as heading above each step
+- Update src/main/export.ts for Markdown, HTML, PDF
+
+BACKWARD COMPATIBILITY:
+- Old .xtoolpath files missing title fields load with defaults
+- Bump schemaVersion
+```
+
+### Agent 12 — Document Preview with Image Resize and Crop
+
+```text
+Add a Preview tab in the Edit phase with image editing controls.
+
+PREVIEW PANEL:
+- New tab/view accessible from Edit phase
+- Render full document layout: title, steps in order (number, title, screenshot with highlight box, description)
+- Single scrollable view matching export output
+- Reusable renderer component (Export phase will share it)
+- Updates in real time as text or images change
+
+IMAGE RESIZE:
+- Drag handles on corners and edges
+- Proportional by default, Shift to unlock aspect ratio
+- Show dimensions (w x h px) near image while dragging
+- Min 200px width, max original resolution
+
+DATA MODEL (src/shared/types.ts):
+- Add to Step interface:
+  - displayWidth?: number
+  - displayHeight?: number
+  - croppedScreenshotPath?: string
+
+IMAGE CROP:
+- "Crop" button per screenshot
+- Darkened overlay with bright draggable/resizable selection rect
+- "Apply Crop" / "Cancel"
+- Shift snaps to aspect ratios (16:9, 4:3, 1:1)
+- Crop is a main-process operation: renderer sends coordinates via IPC, main reads image, crops, writes new file in session directory, returns path
+- Never overwrite original. Store cropped path in croppedScreenshotPath
+- Preview and export use cropped version if set
+
+NEW IPC CHANNELS (src/shared/ipc-channels.ts):
+- image:crop
+
+UNDO:
+- Ctrl+Z reverts last image edit per step
+- In-memory only, 10 edits per step, does not persist across save/load
+
+PERSISTENCE:
+- displayWidth, displayHeight, croppedScreenshotPath persist in session JSON and .xtoolpath
+```
+
+### Agent 13 — Claude Full-Document Review
+
+```text
+Add a full-document Claude review flow alongside the existing per-step rewrite.
+
+TRIGGER:
+- "Claude Review" button in Edit phase toolbar
+- Visually distinct from per-step rewrite buttons
+- Disabled until at least one step has text
+- Badge shows decision count if project memory exists
+
+PROJECT MEMORY:
+- Location: {project_output_dir}/claude_memory.json
+- Schema: projectContext, softwareBeingDocumented, targetAudience, previousDecisions[], terminologyPreferences{}, styleNotes[], lastUpdated
+- First run: file does not exist, Claude's questions include context-gathering
+- Subsequent runs: memory contents included in system prompt
+
+NEW IPC CHANNELS:
+- claude:document-review (question phase)
+- claude:document-rewrite (rewrite phase)
+- claude:memory-load
+- claude:memory-save
+
+QUESTION PHASE:
+- Send full document to Claude: all steps with annotated screenshots (reuse existing annotation logic from claude.ts), titles, text, selection rects
+- Screenshots: resize to max 1568px on longest side for API only, never downscale source files
+- Claude returns JSON array of question objects or empty array
+- UI: modal or side panel with text inputs per question, skip option, Continue button
+- Empty array: show "Sufficient context. Proceeding to rewrite."
+
+REWRITE PHASE:
+- Send same payload + Q&A pairs
+- Claude returns JSON: documentTitle, documentSummary, steps[{index, suggestedTitle, rewrittenDescription}]
+- Not streamed (complete JSON response). Show progress indicator while waiting
+- Diff view: side-by-side per step, green/red block highlighting
+- Accept/Reject per step, Accept All / Reject All
+- Accepted title suggestions set titleManuallyEdited = true
+
+MODEL:
+- Read from settings/env, same as existing claude.ts. Never hardcode.
+
+ERROR HANDLING:
+- API failure: error + Retry button, never lose current work
+- Missing key: message about ANTHROPIC_API_KEY, disable Claude features
+- 120s timeout per call with progress indicator
+- Screenshots >20MB after base64: downscale, log warning
+
+MEMORY UPDATE:
+- After accept/reject flow, update claude_memory.json:
+  - New terminology to terminologyPreferences
+  - Q&A pairs to previousDecisions
+  - Updated audience/software if provided
+  - styleNotes from accept/reject patterns
+```
+
+---
+
+## Phase 9: Polish + Edge Cases
+
+### Agent 14 — Integration Hardening
 
 ```text
 Handle:
@@ -599,7 +733,10 @@ Suggested sequence:
 - Agent 8
 - Agent 9
 - Agent 10
-- Agent 11
+- Agent 11 (editable titles)
+- Agent 12 (document preview + image editing)
+- Agent 13 (Claude full-document review)
+- Agent 14 (polish)
 
 ## Acceptance Checks
 
@@ -612,3 +749,9 @@ Suggested sequence:
 - raw transcript remains visible and unchanged
 - save/load/autosave/restore work
 - Markdown, HTML, and PDF export work
+- step titles are editable, auto-generated from transcript, and appear in all exports
+- document preview renders full layout matching export output
+- image resize and crop work in preview, persist across save/load, export uses cropped/resized versions
+- Claude full-document review asks questions, rewrites all steps, diff view with accept/reject works
+- project memory accumulates across sessions and prevents re-asking resolved questions
+- old .xtoolpath files load gracefully with default values for new fields

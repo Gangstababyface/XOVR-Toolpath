@@ -118,14 +118,26 @@ export function addStep(step: import('../shared/types').Step): void {
   broadcast()
 }
 
+function generateAutoTitle(text: string): string {
+  if (!text || !text.trim()) return ''
+  const words = text.trim().split(/\s+/)
+  const slice = words.slice(0, 7)
+  let title = slice.join(' ')
+  if (words.length > 7) title += '...'
+  return title
+}
+
 export function updateStepTranscript(stepId: string, rawTranscript: string): void {
   state = {
     ...state,
-    steps: state.steps.map((s) =>
-      s.id === stepId
-        ? { ...s, rawTranscript, editedText: rawTranscript }
-        : s
-    )
+    steps: state.steps.map((s) => {
+      if (s.id !== stepId) return s
+      const updated = { ...s, rawTranscript, editedText: rawTranscript }
+      if (!s.titleManuallyEdited) {
+        updated.title = generateAutoTitle(rawTranscript) || `Step ${s.index + 1}`
+      }
+      return updated
+    })
   }
   broadcast()
 }
@@ -159,6 +171,16 @@ export function updateStepText(stepId: string, editedText: string): void {
       s.id === stepId
         ? { ...s, editedText, rewriteStatus: 'manually_edited' as const }
         : s
+    )
+  }
+  broadcast()
+}
+
+export function updateStepTitle(stepId: string, title: string, manuallyEdited: boolean): void {
+  state = {
+    ...state,
+    steps: state.steps.map((s) =>
+      s.id === stepId ? { ...s, title, titleManuallyEdited: manuallyEdited } : s
     )
   }
   broadcast()

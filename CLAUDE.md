@@ -83,6 +83,27 @@ Main Process (Node, source of truth)      Renderer Windows / Capture Context
 9. **Retry discipline:** Use capped exponential backoff with at most 3 retries for transcription and Claude calls, never run Claude rewrites in parallel, and surface per-step failure state with manual retry.
 10. **Sequential build flow:** Even if the implementation plan is written in agents, execute phases sequentially against one codebase to avoid conflicts.
 
+## Upcoming Features (Post-Phase 7)
+
+Three features are being added to the Edit and Export phases:
+
+1. **Editable Step Titles.** Each step gets a `title` field and `titleManuallyEdited` flag. Auto-generates from the first 6-8 words of the transcript if not manually edited. Titles appear in the step list, preview, and all exports.
+
+2. **Document Preview with Image Editing.** A Preview tab in the Edit phase shows the full document layout. Each screenshot can be resized (drag handles, proportional by default) and cropped (overlay selection, creates a new file, never overwrites original). New Step fields: `displayWidth`, `displayHeight`, `croppedScreenshotPath`. The preview renderer is a reusable component shared with Export.
+
+3. **Claude Full-Document Review.** A separate flow from the existing per-step rewrite. Sends the entire document (all steps, all annotated screenshots via vision API) to Claude for a comprehensive rewrite. Two-phase: question generation, then full rewrite with diff view (accept/reject per step). Uses a `claude_memory.json` file in the project output directory to accumulate context across sessions (target audience, terminology, past decisions). Model is read from settings/env, never hardcoded.
+
+### New Data Model Fields (Step interface)
+
+All new fields are optional with sensible defaults for backward compatibility with existing .xtoolpath files:
+- `title: string` (default: "Step {index}")
+- `titleManuallyEdited: boolean` (default: false)
+- `displayWidth?: number` (default: original width)
+- `displayHeight?: number` (default: original height)
+- `croppedScreenshotPath?: string` (default: undefined)
+
+Bump `schemaVersion` when these fields are added.
+
 ## Development
 
 ```bash

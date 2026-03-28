@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IpcChannels } from '../shared/ipc-channels'
-import type { Rect, RecordingSessionState } from '../shared/types'
+import type { Rect, RecordingSessionState, ClaudeMemory, DocumentReviewQuestion, DocumentReviewResult } from '../shared/types'
 
 const api = {
   // Recording lifecycle
@@ -34,6 +34,7 @@ const api = {
     imgWidth: number
     imgHeight: number
     displayScale: number
+    mode?: 'crop' | 'highlight'
   } | null> => ipcRenderer.invoke(IpcChannels.OVERLAY_GET_DATA),
   overlayResult: (data: { rect: Rect | null }): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.OVERLAY_RESULT, data),
@@ -161,6 +162,35 @@ const api = {
     ipcRenderer.invoke(IpcChannels.SETTINGS_GET),
   settingsSave: (data: Record<string, unknown>): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.SETTINGS_SAVE, data),
+
+  // Step title editing
+  stepUpdateTitle: (data: { stepId: string; title: string }): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.STEP_UPDATE_TITLE, data),
+
+  // Claude full-document review
+  claudeDocumentReview: (): Promise<DocumentReviewQuestion[]> =>
+    ipcRenderer.invoke(IpcChannels.CLAUDE_DOCUMENT_REVIEW),
+  claudeDocumentRewrite: (data: {
+    questions: Array<{ id: string; question: string }>
+    answers: Record<string, string>
+  }): Promise<DocumentReviewResult> =>
+    ipcRenderer.invoke(IpcChannels.CLAUDE_DOCUMENT_REWRITE, data),
+  onClaudeReviewProgress: (
+    callback: (progress: { status: string; message?: string }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      progress: { status: string; message?: string }
+    ): void => { callback(progress) }
+    ipcRenderer.on(IpcChannels.CLAUDE_REVIEW_PROGRESS, handler)
+    return () => { ipcRenderer.removeListener(IpcChannels.CLAUDE_REVIEW_PROGRESS, handler) }
+  },
+
+  // Claude memory
+  claudeMemoryLoad: (): Promise<ClaudeMemory | null> =>
+    ipcRenderer.invoke(IpcChannels.CLAUDE_MEMORY_LOAD),
+  claudeMemorySave: (data: { memory: ClaudeMemory }): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.CLAUDE_MEMORY_SAVE, data),
 
   // Autosave / recovery
   autosaveCheck: (): Promise<unknown> =>

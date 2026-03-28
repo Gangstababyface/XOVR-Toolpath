@@ -50,6 +50,16 @@ export const IpcChannels = {
   SETTINGS_GET: 'settings:get',
   SETTINGS_SAVE: 'settings:save',
 
+  // Step title editing
+  STEP_UPDATE_TITLE: 'step:update-title',
+
+  // Claude full-document review
+  CLAUDE_DOCUMENT_REVIEW: 'claude:document-review',
+  CLAUDE_DOCUMENT_REWRITE: 'claude:document-rewrite',
+  CLAUDE_REVIEW_PROGRESS: 'claude:review-progress',
+  CLAUDE_MEMORY_LOAD: 'claude:memory-load',
+  CLAUDE_MEMORY_SAVE: 'claude:memory-save',
+
   // Autosave / recovery
   AUTOSAVE_CHECK: 'autosave:check',
   AUTOSAVE_RESTORE: 'autosave:restore',

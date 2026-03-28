@@ -32,7 +32,7 @@ export function triggerAutosave(): void {
   if (state.steps.length === 0) return
 
   const snapshot: AutosaveSnapshot = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     savedAt: new Date().toISOString(),
     session: state
   }
@@ -51,7 +51,16 @@ export function checkForRecoverableAutosave(): AutosaveSnapshot | null {
     if (!existsSync(AUTOSAVE_PATH)) return null
     const raw = readFileSync(AUTOSAVE_PATH, 'utf-8')
     const snapshot: AutosaveSnapshot = JSON.parse(raw)
-    if (snapshot.schemaVersion !== 1 || !snapshot.session?.steps?.length) return null
+    if (!snapshot.schemaVersion || snapshot.schemaVersion > 2 || !snapshot.session?.steps?.length) return null
+    // Migrate older schema steps
+    if (snapshot.schemaVersion <= 2) {
+      snapshot.session.steps = snapshot.session.steps.map((s, i) => ({
+        ...s,
+        cropRect: s.cropRect ?? null,
+        title: s.title || `Step ${i + 1}`,
+        titleManuallyEdited: s.titleManuallyEdited ?? false
+      }))
+    }
     return snapshot
   } catch {
     return null

@@ -1,5 +1,5 @@
 import { BrowserWindow, desktopCapturer, dialog, ipcMain, screen } from 'electron'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { tmpdir } from 'os'
 import { mkdirSync } from 'fs'
 import { writeFile, rm, readFile } from 'fs/promises'
@@ -9,7 +9,8 @@ import type { Rect, Step } from '../shared/types'
 import * as stateBus from './state-bus'
 import { registerHotkeys, unregisterHotkeys } from './hotkeys'
 import { transcribeAllSteps } from './transcription'
-import { generateQuestions, rewriteStep, batchRewriteAll } from './claude'
+import { generateQuestions, rewriteStep, batchRewriteAll, documentReview, documentRewrite } from './claude'
+import { loadClaudeMemory, saveClaudeMemory } from './claude-memory'
 import * as settings from './settings'
 import { saveProject, loadProject, exportMarkdown, exportHtml, exportPdf } from './export'
 import { checkForRecoverableAutosave, discardAutosave, markClean } from './autosave'
@@ -27,6 +28,7 @@ interface OverlayInitData {
   imgWidth: number
   imgHeight: number
   displayScale: number
+  mode: 'crop' | 'highlight'
 }
 
 let overlayData: OverlayInitData | null = null
@@ -156,8 +158,11 @@ function createOverlayWindow(displayBounds: Electron.Rectangle): BrowserWindow {
     win.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'overlay' })
   }
 
+  win.setAlwaysOnTop(true, 'screen-saver')
+
   win.webContents.on('did-finish-load', () => {
     win.focus()
+    win.focusOnWebView()
   })
 
   return win
@@ -269,17 +274,36 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
       relCursorY = Math.round(sourceDisplay.bounds.height / 2)
     }
 
+    // Step 5a — CROP overlay (blue/cyan, "Select area to show")
     overlayData = {
       screenshotDataUrl,
       cursorX: relCursorX,
       cursorY: relCursorY,
       imgWidth,
       imgHeight,
-      displayScale: scaleFactor
+      displayScale: scaleFactor,
+      mode: 'crop'
     }
 
-    // Open overlay on the SOURCE display, not the cursor display
-    const rect = await openOverlayAndWaitForResult(sourceDisplay.bounds)
+    console.log('[capture] Opening CROP overlay...')
+    const cropRect = await openOverlayAndWaitForResult(sourceDisplay.bounds)
+    console.log('[capture] Crop overlay closed. Result: %s', cropRect ? JSON.stringify(cropRect) : 'skipped')
+
+    // Step 5b — HIGHLIGHT overlay (red, "Highlight click target")
+    console.log('[capture] Setting highlight overlay data...')
+    overlayData = {
+      screenshotDataUrl,
+      cursorX: relCursorX,
+      cursorY: relCursorY,
+      imgWidth,
+      imgHeight,
+      displayScale: scaleFactor,
+      mode: 'highlight'
+    }
+
+    console.log('[capture] Opening HIGHLIGHT overlay...')
+    const highlightRect = await openOverlayAndWaitForResult(sourceDisplay.bounds)
+    console.log('[capture] Highlight overlay closed. Result: %s', highlightRect ? JSON.stringify(highlightRect) : 'skipped')
 
     // Step 6 — create Step record
     const step: Step = {
@@ -287,16 +311,19 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
       index: stepIndex,
       timestamp: effectiveTimestamp,
       screenshot: screenshotPath,
-      selectionRect: rect,
+      cropRect,
+      selectionRect: highlightRect,
       rawTranscript: '',
       editedText: '',
       claudeQuestions: [],
       rewriteStatus: 'raw',
-      rewriteSource: 'none'
+      rewriteSource: 'none',
+      title: `Step ${stepIndex + 1}`,
+      titleManuallyEdited: false
     }
 
     stateBus.addStep(step)
-    console.log('[capture] Step %d created (rect: %s)', stepIndex, rect ? 'confirmed' : 'skipped')
+    console.log('[capture] Step %d created (crop: %s, highlight: %s)', stepIndex, cropRect ? 'yes' : 'skipped', highlightRect ? 'yes' : 'skipped')
   } catch (err) {
     console.error('[capture] Failed:', err)
   } finally {
@@ -316,8 +343,21 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
 async function openOverlayAndWaitForResult(
   displayBounds: Electron.Rectangle
 ): Promise<Rect | null> {
+  // Ensure any previous overlay is fully closed before opening a new one
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    await new Promise<void>((resolve) => {
+      overlayWindow!.on('closed', () => resolve())
+      overlayWindow!.close()
+    })
+    overlayWindow = null
+  }
+
   return new Promise<Rect | null>((resolve) => {
+    let resolved = false
+
     overlayResultResolver = (rect) => {
+      if (resolved) return
+      resolved = true
       overlayResultResolver = null
       closeOverlayWindow()
       resolve(rect)
@@ -325,10 +365,18 @@ async function openOverlayAndWaitForResult(
 
     overlayWindow = createOverlayWindow(displayBounds)
 
+    // Ensure focus after the window is fully ready
+    overlayWindow.once('show', () => {
+      overlayWindow?.focus()
+    })
+    overlayWindow.show()
+
     overlayWindow.on('closed', () => {
       overlayWindow = null
-      if (overlayResultResolver) {
-        overlayResultResolver(null)
+      if (!resolved) {
+        resolved = true
+        overlayResultResolver = null
+        resolve(null)
       }
     })
   })
@@ -404,13 +452,17 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(IpcChannels.OVERLAY_GET_DATA, async () => {
+    console.log('[ipc] overlay:get-data — mode=%s hasData=%s', overlayData?.mode, !!overlayData)
     return overlayData
   })
 
   ipcMain.handle(IpcChannels.OVERLAY_RESULT, async (_event, data: { rect: Rect | null }) => {
-    console.log('[ipc] overlay:result — rect=%s', data.rect ? JSON.stringify(data.rect) : 'null')
+    console.log('[ipc] overlay:result — rect=%s resolver=%s', data.rect ? JSON.stringify(data.rect) : 'null', !!overlayResultResolver)
     if (overlayResultResolver) {
       overlayResultResolver(data.rect)
+    } else {
+      // No resolver waiting — force-close the orphaned overlay window
+      closeOverlayWindow()
     }
   })
 
@@ -576,4 +628,49 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IpcChannels.AUTOSAVE_DISCARD, async () => {
     discardAutosave()
   })
+
+  // ── Step title editing — Phase 8 ──
+
+  ipcMain.handle(
+    IpcChannels.STEP_UPDATE_TITLE,
+    async (_event, data: { stepId: string; title: string }) => {
+      stateBus.updateStepTitle(data.stepId, data.title, true)
+    }
+  )
+
+  // ── Image operations — Phase 8 ──
+
+  // ── Claude full-document review — Phase 8 ──
+
+  ipcMain.handle(IpcChannels.CLAUDE_DOCUMENT_REVIEW, async () => {
+    const state = stateBus.getState()
+    return documentReview(state.steps)
+  })
+
+  ipcMain.handle(
+    IpcChannels.CLAUDE_DOCUMENT_REWRITE,
+    async (_event, data: { questions: Array<{ id: string; question: string }>; answers: Record<string, string> }) => {
+      const state = stateBus.getState()
+      return documentRewrite(state.steps, data.questions, data.answers)
+    }
+  )
+
+  ipcMain.handle(IpcChannels.CLAUDE_MEMORY_LOAD, async () => {
+    const state = stateBus.getState()
+    const dir = state.sessionDir || settings.getSettings().lastProjectPath
+    if (!dir) return null
+    const memDir = state.sessionDir ? state.sessionDir : dirname(dir)
+    return loadClaudeMemory(memDir)
+  })
+
+  ipcMain.handle(
+    IpcChannels.CLAUDE_MEMORY_SAVE,
+    async (_event, data: { memory: import('../shared/types').ClaudeMemory }) => {
+      const state = stateBus.getState()
+      const dir = state.sessionDir || settings.getSettings().lastProjectPath
+      if (!dir) return
+      const memDir = state.sessionDir ? state.sessionDir : dirname(dir)
+      saveClaudeMemory(memDir, data.memory)
+    }
+  )
 }

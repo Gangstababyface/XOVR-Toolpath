@@ -8,6 +8,7 @@ interface OverlayData {
   imgWidth: number
   imgHeight: number
   displayScale: number
+  mode?: 'crop' | 'highlight'
 }
 
 const DEFAULT_BOX_W = 200
@@ -24,13 +25,27 @@ function SelectionOverlay(): JSX.Element {
   const [rect, setRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [drawing, setDrawing] = useState(false)
   const drawStartRef = useRef<{ x: number; y: number } | null>(null)
+  const rectRef = useRef(rect)
+  const dataRef = useRef(data)
+  rectRef.current = rect
+  dataRef.current = data
+
+  const mode = data?.mode || 'highlight'
+  const isCrop = mode === 'crop'
+
+  // Colors and labels per mode
+  const borderColor = isCrop ? '#06b6d4' : '#ef4444' // cyan for crop, red for highlight
+  const labelText = isCrop
+    ? 'Select area to show \u00b7 Enter = confirm \u00b7 Esc = skip (use full screenshot)'
+    : 'Highlight click target \u00b7 Enter = confirm \u00b7 Esc = skip (no highlight)'
 
   // Fetch overlay data on mount
   useEffect(() => {
+    console.log('[overlay] Component mounted, fetching data...')
     window.api.overlayGetData().then((d) => {
+      console.log('[overlay] overlayGetData returned:', d ? `mode=${d.mode} img=${d.imgWidth}x${d.imgHeight} dataUrl=${d.screenshotDataUrl?.slice(0, 50)}...` : 'null')
       if (!d) return
       setData(d)
-      // Default selection box centered on cursor position
       const w = DEFAULT_BOX_W
       const h = DEFAULT_BOX_H
       setRect({
@@ -39,11 +54,39 @@ function SelectionOverlay(): JSX.Element {
         w,
         h
       })
-      console.log('[overlay] Data loaded: %dx%d, cursor at (%d,%d)', d.imgWidth, d.imgHeight, d.cursorX, d.cursorY)
     })
   }, [])
 
-  // Keyboard: Enter = confirm, Escape = skip
+  function toScreenshotRect(r: { x: number; y: number; w: number; h: number }, d: OverlayData): Rect {
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    return {
+      x: Math.round((r.x / vw) * d.imgWidth),
+      y: Math.round((r.y / vh) * d.imgHeight),
+      width: Math.round((r.w / vw) * d.imgWidth),
+      height: Math.round((r.h / vh) * d.imgHeight),
+      displayScale: d.displayScale
+    }
+  }
+
+  function confirmSelection(): void {
+    const r = rectRef.current
+    const d = dataRef.current
+    if (!r || !d) {
+      skipSelection()
+      return
+    }
+    const screenshotRect = toScreenshotRect(r, d)
+    console.log('[overlay] Confirmed rect (mode=%s):', d.mode || 'highlight', JSON.stringify(screenshotRect))
+    window.api.overlayResult({ rect: screenshotRect }).then(() => window.close())
+  }
+
+  function skipSelection(): void {
+    console.log('[overlay] Skipped (mode=%s)', dataRef.current?.mode || 'highlight')
+    window.api.overlayResult({ rect: null }).then(() => window.close())
+  }
+
+  // Keyboard: Enter = confirm, Escape = skip — single listener, reads from refs
   useEffect(() => {
     function handleKey(e: KeyboardEvent): void {
       if (e.key === 'Enter') {
@@ -56,44 +99,11 @@ function SelectionOverlay(): JSX.Element {
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [rect, data])
-
-  // Convert overlay logical rect to screenshot pixel rect
-  const toScreenshotRect = useCallback(
-    (r: { x: number; y: number; w: number; h: number }): Rect | null => {
-      if (!data) return null
-      const vw = window.innerWidth
-      const vh = window.innerHeight
-      return {
-        x: Math.round((r.x / vw) * data.imgWidth),
-        y: Math.round((r.y / vh) * data.imgHeight),
-        width: Math.round((r.w / vw) * data.imgWidth),
-        height: Math.round((r.h / vh) * data.imgHeight),
-        displayScale: data.displayScale
-      }
-    },
-    [data]
-  )
-
-  function confirmSelection(): void {
-    if (!rect || !data) {
-      skipSelection()
-      return
-    }
-    const screenshotRect = toScreenshotRect(rect)
-    console.log('[overlay] Confirmed rect:', JSON.stringify(screenshotRect))
-    window.api.overlayResult({ rect: screenshotRect })
-  }
-
-  function skipSelection(): void {
-    console.log('[overlay] Skipped')
-    window.api.overlayResult({ rect: null })
-  }
+  }, [])
 
   // ── Mouse drawing handlers ──
 
   function handleMouseDown(e: React.MouseEvent): void {
-    // Only start drawing on the background, not on the existing rect
     if ((e.target as HTMLElement).dataset.role === 'handle') return
     e.preventDefault()
     setDrawing(true)
@@ -118,7 +128,6 @@ function SelectionOverlay(): JSX.Element {
     if (!drawing) return
     setDrawing(false)
     drawStartRef.current = null
-    // If the drawn rect is too small, revert to default
     if (rect && rect.w < 10 && rect.h < 10) {
       if (data) {
         setRect({
@@ -144,7 +153,7 @@ function SelectionOverlay(): JSX.Element {
         height: '100vh',
         position: 'relative',
         overflow: 'hidden',
-        cursor: drawing ? 'crosshair' : 'crosshair',
+        cursor: 'crosshair',
         userSelect: 'none'
       }}
       onMouseDown={handleMouseDown}
@@ -168,34 +177,12 @@ function SelectionOverlay(): JSX.Element {
       />
 
       {/* Dim overlay — four rects around the selection */}
-      {/* Top */}
       <div style={{ ...dimStyle, top: 0, left: 0, right: 0, height: r.y }} />
-      {/* Bottom */}
-      <div
-        style={{ ...dimStyle, top: r.y + r.h, left: 0, right: 0, bottom: 0 }}
-      />
-      {/* Left */}
-      <div
-        style={{
-          ...dimStyle,
-          top: r.y,
-          left: 0,
-          width: r.x,
-          height: r.h
-        }}
-      />
-      {/* Right */}
-      <div
-        style={{
-          ...dimStyle,
-          top: r.y,
-          left: r.x + r.w,
-          right: 0,
-          height: r.h
-        }}
-      />
+      <div style={{ ...dimStyle, top: r.y + r.h, left: 0, right: 0, bottom: 0 }} />
+      <div style={{ ...dimStyle, top: r.y, left: 0, width: r.x, height: r.h }} />
+      <div style={{ ...dimStyle, top: r.y, left: r.x + r.w, right: 0, height: r.h }} />
 
-      {/* Selection border */}
+      {/* Selection border — color depends on mode */}
       {rect && rect.w > 0 && rect.h > 0 && (
         <div
           style={{
@@ -204,12 +191,33 @@ function SelectionOverlay(): JSX.Element {
             left: r.x,
             width: r.w,
             height: r.h,
-            border: '2px solid #ef4444',
+            border: `2px solid ${borderColor}`,
             boxSizing: 'border-box',
             pointerEvents: 'none'
           }}
         />
       )}
+
+      {/* Mode label (top-center) */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 20,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          backgroundColor: isCrop ? 'rgba(6, 182, 212, 0.85)' : 'rgba(239, 68, 68, 0.85)',
+          color: '#fff',
+          padding: '6px 18px',
+          borderRadius: 6,
+          fontSize: 15,
+          fontWeight: 600,
+          fontFamily: 'system-ui, sans-serif',
+          pointerEvents: 'none',
+          whiteSpace: 'nowrap'
+        }}
+      >
+        {isCrop ? 'Step 1: Select area to show' : 'Step 2: Highlight click target'}
+      </div>
 
       {/* Instructions */}
       <div
@@ -228,8 +236,7 @@ function SelectionOverlay(): JSX.Element {
           whiteSpace: 'nowrap'
         }}
       >
-        Draw selection or use default &middot; Enter = confirm &middot; Esc =
-        skip
+        {labelText}
       </div>
     </div>
   )

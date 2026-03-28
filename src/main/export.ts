@@ -28,7 +28,7 @@ export async function saveProject(filePath: string): Promise<void> {
   })
 
   const project: ProjectFile = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     title: projectName,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -45,14 +45,18 @@ export async function loadProject(filePath: string): Promise<ProjectFile> {
   const project: ProjectFile = JSON.parse(raw)
   const projectDir = dirname(filePath)
 
-  if (!project.schemaVersion || project.schemaVersion > 1) {
+  if (!project.schemaVersion || project.schemaVersion > 2) {
     throw new Error(`Unsupported schema version: ${project.schemaVersion}`)
   }
 
-  // Resolve relative screenshot paths to absolute
-  project.steps = project.steps.map((step) => ({
+  // Resolve relative screenshot paths to absolute and migrate v1 steps
+  project.steps = project.steps.map((step, i) => ({
     ...step,
-    screenshot: join(projectDir, step.screenshot.replace(/\//g, '\\'))
+    screenshot: join(projectDir, step.screenshot.replace(/\//g, '\\')),
+    // v1/v2 migration: add defaults for new fields
+    cropRect: step.cropRect ?? null,
+    title: step.title || `Step ${i + 1}`,
+    titleManuallyEdited: step.titleManuallyEdited ?? false
   }))
 
   console.log('[export] Project loaded: %s (%d steps)', filePath, project.steps.length)
@@ -77,9 +81,11 @@ export async function exportMarkdown(outputPath: string): Promise<void> {
       copyFileSync(step.screenshot, destPath)
     }
 
-    lines.push(`## Step ${step.index + 1}`)
+    const stepTitle = step.title || `Step ${step.index + 1}`
+    const imgPath = screenshotName
+    lines.push(`## ${stepTitle}`)
     lines.push('')
-    lines.push(`![Step ${step.index + 1} screenshot](captures/${screenshotName})`)
+    lines.push(`![${stepTitle} screenshot](captures/${imgPath})`)
     lines.push('')
     lines.push(step.editedText || step.rawTranscript || '_No text_')
     lines.push('')
@@ -92,11 +98,13 @@ export async function exportMarkdown(outputPath: string): Promise<void> {
 // ── HTML generation (shared by HTML export and PDF) ──
 
 function generateHtml(steps: Step[]): string {
-  const tocEntries = steps.map((s) =>
-    `<li><a href="#step-${s.index + 1}">Step ${s.index + 1}</a></li>`
-  ).join('\n      ')
+  const tocEntries = steps.map((s) => {
+    const title = s.title || `Step ${s.index + 1}`
+    return `<li><a href="#step-${s.index + 1}">${escapeHtml(title)}</a></li>`
+  }).join('\n      ')
 
   const stepSections = steps.map((step) => {
+    const stepTitle = step.title || `Step ${step.index + 1}`
     let imgSrc = ''
     let imgWidth = 0
     let imgHeight = 0
@@ -107,7 +115,6 @@ function generateHtml(steps: Step[]): string {
         const data = readFileSync(step.screenshot).toString('base64')
         imgSrc = `data:${mime};base64,${data}`
 
-        // Read actual image dimensions for accurate SVG viewBox
         const img = nativeImage.createFromPath(step.screenshot)
         const size = img.getSize()
         imgWidth = size.width
@@ -116,17 +123,50 @@ function generateHtml(steps: Step[]): string {
     } catch { /* skip missing screenshots */ }
 
     const text = step.editedText || step.rawTranscript || ''
-    const selectionOverlay = step.selectionRect && imgWidth > 0
-      ? renderSelectionSvg(step.selectionRect, imgWidth, imgHeight)
+
+    // Determine visible region (crop or full)
+    const crop = step.cropRect
+    const viewX = crop ? crop.x : 0
+    const viewY = crop ? crop.y : 0
+    const viewW = crop ? crop.width : imgWidth
+    const viewH = crop ? crop.height : imgHeight
+
+    // Highlight rect translated to cropped coordinates
+    const selectionOverlay = step.selectionRect && viewW > 0
+      ? renderSelectionSvg(
+          {
+            ...step.selectionRect,
+            x: step.selectionRect.x - viewX,
+            y: step.selectionRect.y - viewY
+          },
+          viewW, viewH
+        )
       : ''
+
+    // For cropped images, use SVG to clip the image to the crop region
+    let imgHtml = ''
+    if (imgSrc && crop && imgWidth > 0) {
+      const cropPct = {
+        left: (crop.x / imgWidth) * 100,
+        top: (crop.y / imgHeight) * 100,
+        right: ((imgWidth - crop.x - crop.width) / imgWidth) * 100,
+        bottom: ((imgHeight - crop.y - crop.height) / imgHeight) * 100
+      }
+      imgHtml = `<div class="img-container">
+        <img src="${imgSrc}" alt="${escapeHtml(stepTitle)}" style="object-fit: cover; object-position: ${-cropPct.left}% ${-cropPct.top}%; clip-path: inset(${cropPct.top}% ${cropPct.right}% ${cropPct.bottom}% ${cropPct.left}%); max-width: none; width: 100%;" />
+        ${selectionOverlay}
+      </div>`
+    } else if (imgSrc) {
+      imgHtml = `<div class="img-container">
+        <img src="${imgSrc}" alt="${escapeHtml(stepTitle)}" />
+        ${selectionOverlay}
+      </div>`
+    }
 
     return `
     <div class="step" id="step-${step.index + 1}">
-      <h2>Step ${step.index + 1}</h2>
-      ${imgSrc ? `<div class="img-container">
-        <img src="${imgSrc}" alt="Step ${step.index + 1}" />
-        ${selectionOverlay}
-      </div>` : ''}
+      <h2>${escapeHtml(stepTitle)}</h2>
+      ${imgHtml}
       <p>${escapeHtml(text)}</p>
     </div>`
   }).join('\n')

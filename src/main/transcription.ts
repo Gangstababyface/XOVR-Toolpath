@@ -558,12 +558,15 @@ export async function transcribeAllSteps(): Promise<void> {
         index: steps.length,
         timestamp: audioDurationMs,
         screenshot: lastStep.screenshot,
+        cropRect: null,
         selectionRect: null,
         rawTranscript: '',
         editedText: '',
         claudeQuestions: [],
         rewriteStatus: 'raw',
-        rewriteSource: 'none'
+        rewriteSource: 'none',
+        title: `Step ${steps.length + 1}`,
+        titleManuallyEdited: false
       }
       stateBus.addStep(trailingStep)
       console.log('[transcription] Created trailing narration step: index=%d', trailingStep.index)

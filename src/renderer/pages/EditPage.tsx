@@ -2,6 +2,8 @@ import { useState, useCallback, useRef } from 'react'
 import { useRecordingStore } from '../stores/recordingStore'
 import StepCard from '../components/StepCard'
 import ClaudeChat from '../components/ClaudeChat'
+import DocumentPreview from '../components/DocumentPreview'
+import DocumentReviewPanel from '../components/DocumentReviewPanel'
 
 function EditPage(): JSX.Element {
   const steps = useRecordingStore((s) => s.steps)
@@ -10,6 +12,8 @@ function EditPage(): JSX.Element {
   const [batchRunning, setBatchRunning] = useState(false)
   const [rewriteTrigger, setRewriteTrigger] = useState(0)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [centerTab, setCenterTab] = useState<'step' | 'preview'>('step')
+  const [reviewActive, setReviewActive] = useState(false)
   const exportRef = useRef<HTMLDivElement>(null)
 
   const selectedStep = steps[selectedIndex] ?? null
@@ -90,6 +94,19 @@ function EditPage(): JSX.Element {
             )}
           </div>
           <button
+            onClick={() => setReviewActive(true)}
+            disabled={!steps.some((s) => s.editedText || s.rawTranscript)}
+            style={{
+              ...topBarBtn,
+              backgroundColor: '#7c3aed',
+              color: '#fff',
+              border: '1px solid #6d28d9',
+              opacity: steps.some((s) => s.editedText || s.rawTranscript) ? 1 : 0.5
+            }}
+          >
+            Claude Review
+          </button>
+          <button
             onClick={async () => {
               try {
                 const path = await window.api.fileSaveProject(
@@ -168,7 +185,7 @@ function EditPage(): JSX.Element {
                     textOverflow: 'ellipsis'
                   }}
                 >
-                  Step {i + 1}
+                  {step.title || `Step ${i + 1}`}
                 </div>
                 <div
                   style={{
@@ -188,16 +205,55 @@ function EditPage(): JSX.Element {
           ))}
         </div>
 
-        {/* Center — step card */}
-        <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
-          {selectedStep ? (
-            <StepCard step={selectedStep} onTextChange={handleTextChange} />
-          ) : (
-            <p style={{ color: '#6b7280' }}>No step selected</p>
-          )}
+        {/* Center — tab bar + content */}
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {/* Tab bar */}
+          <div style={{
+            display: 'flex',
+            gap: 0,
+            borderBottom: '1px solid #e5e7eb',
+            backgroundColor: '#fff',
+            flexShrink: 0
+          }}>
+            {(['step', 'preview'] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setCenterTab(tab)}
+                style={{
+                  padding: '8px 20px',
+                  fontSize: 13,
+                  fontWeight: centerTab === tab ? 600 : 400,
+                  color: centerTab === tab ? '#2563eb' : '#6b7280',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  borderBottom: centerTab === tab ? '2px solid #2563eb' : '2px solid transparent',
+                  cursor: 'pointer'
+                }}
+              >
+                {tab === 'step' ? 'Step Editor' : 'Document Preview'}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
+            {centerTab === 'step' ? (
+              selectedStep ? (
+                <StepCard
+                  step={selectedStep}
+                  onTextChange={handleTextChange}
+                  onTitleTab={() => setSelectedIndex((i) => Math.min(steps.length - 1, i + 1))}
+                />
+              ) : (
+                <p style={{ color: '#6b7280' }}>No step selected</p>
+              )
+            ) : (
+              <DocumentPreview steps={steps} />
+            )}
+          </div>
         </div>
 
-        {/* Right panel — Claude chat */}
+        {/* Right panel — Claude chat or Document Review */}
         <div
           style={{
             width: 300,
@@ -208,7 +264,12 @@ function EditPage(): JSX.Element {
             overflowY: 'auto'
           }}
         >
-          {selectedStep ? (
+          {reviewActive ? (
+            <DocumentReviewPanel
+              steps={steps}
+              onClose={() => setReviewActive(false)}
+            />
+          ) : selectedStep ? (
             <ClaudeChat step={selectedStep} rewriteTrigger={rewriteTrigger} />
           ) : (
             <div style={{ color: '#9ca3af', fontSize: 13, textAlign: 'center' }}>

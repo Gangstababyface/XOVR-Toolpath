@@ -4,12 +4,17 @@ import type { Step } from '../../shared/types'
 interface StepCardProps {
   step: Step
   onTextChange: (stepId: string, editedText: string) => void
+  onTitleTab?: () => void
 }
 
-function StepCard({ step, onTextChange }: StepCardProps): JSX.Element {
+function StepCard({ step, onTextChange, onTitleTab }: StepCardProps): JSX.Element {
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(false)
+  const [showFull, setShowFull] = useState(false)
   const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState(step.title)
+  const titleInputRef = useRef<HTMLInputElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -45,28 +50,57 @@ function StepCard({ step, onTextChange }: StepCardProps): JSX.Element {
     [step.id, onTextChange]
   )
 
-  // Compute selection rect overlay position scaled to rendered image size
-  const renderRect = () => {
-    if (!step.selectionRect || !imgRef.current || !imgSize) return null
-    const rendered = imgRef.current.getBoundingClientRect()
-    const scaleX = rendered.width / imgSize.w
-    const scaleY = rendered.height / imgSize.h
+  // Sync title draft when step changes
+  useEffect(() => {
+    setTitleDraft(step.title || `Step ${step.index + 1}`)
+    setEditingTitle(false)
+  }, [step.id, step.title, step.index])
+
+  const commitTitle = useCallback(() => {
+    const trimmed = titleDraft.trim()
+    if (trimmed && trimmed !== step.title) {
+      window.api.stepUpdateTitle({ stepId: step.id, title: trimmed })
+    }
+    setEditingTitle(false)
+  }, [titleDraft, step.id, step.title])
+
+  const handleTitleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      commitTitle()
+    } else if (e.key === 'Tab') {
+      e.preventDefault()
+      commitTitle()
+      onTitleTab?.()
+    } else if (e.key === 'Escape') {
+      setTitleDraft(step.title || `Step ${step.index + 1}`)
+      setEditingTitle(false)
+    }
+  }, [commitTitle, onTitleTab, step.title, step.index])
+
+  // Render highlight rect as SVG overlay using viewBox for proper coordinate mapping
+  const renderHighlightSvg = () => {
+    if (!step.selectionRect || !imgSize) return null
+
+    const crop = step.cropRect && !showFull ? step.cropRect : null
+    const viewX = crop ? crop.x : 0
+    const viewY = crop ? crop.y : 0
+    const viewW = crop ? crop.width : imgSize.w
+    const viewH = crop ? crop.height : imgSize.h
+
     const r = step.selectionRect
+    const strokeWidth = Math.max(2, Math.round(Math.max(viewW, viewH) / 400))
 
     return (
-      <div
-        style={{
-          position: 'absolute',
-          left: r.x * scaleX,
-          top: r.y * scaleY,
-          width: r.width * scaleX,
-          height: r.height * scaleY,
-          border: '2px solid #ef4444',
-          borderRadius: 2,
-          pointerEvents: 'none',
-          boxSizing: 'border-box'
-        }}
-      />
+      <svg
+        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+        viewBox={`${viewX} ${viewY} ${viewW} ${viewH}`}
+        preserveAspectRatio="xMinYMin meet"
+      >
+        <rect
+          x={r.x} y={r.y} width={r.width} height={r.height}
+          fill="none" stroke="#ef4444" strokeWidth={strokeWidth}
+        />
+      </svg>
     )
   }
 
@@ -102,6 +136,49 @@ function StepCard({ step, onTextChange }: StepCardProps): JSX.Element {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
+      {/* Editable step title */}
+      {editingTitle ? (
+        <input
+          ref={titleInputRef}
+          value={titleDraft}
+          onChange={(e) => setTitleDraft(e.target.value)}
+          onBlur={commitTitle}
+          onKeyDown={handleTitleKeyDown}
+          autoFocus
+          style={{
+            fontSize: 18,
+            fontWeight: 700,
+            color: '#111827',
+            border: '1px solid #2563eb',
+            borderRadius: 4,
+            padding: '4px 8px',
+            outline: 'none',
+            width: '100%'
+          }}
+        />
+      ) : (
+        <div
+          onClick={() => {
+            setEditingTitle(true)
+            setTimeout(() => titleInputRef.current?.select(), 0)
+          }}
+          title="Click to edit title"
+          style={{
+            fontSize: 18,
+            fontWeight: 700,
+            color: '#111827',
+            cursor: 'text',
+            padding: '4px 8px',
+            borderRadius: 4,
+            border: '1px solid transparent'
+          }}
+          onMouseOver={(e) => { (e.currentTarget.style.borderColor = '#d1d5db') }}
+          onMouseOut={(e) => { (e.currentTarget.style.borderColor = 'transparent') }}
+        >
+          {step.title || `Step ${step.index + 1}`}
+        </div>
+      )}
+
       {/* Screenshot with selection overlay */}
       <div
         style={{
@@ -115,20 +192,56 @@ function StepCard({ step, onTextChange }: StepCardProps): JSX.Element {
       >
         {screenshotUrl ? (
           <>
-            <img
-              ref={imgRef}
-              src={screenshotUrl}
-              onLoad={handleImgLoad}
-              style={{
-                display: 'block',
-                width: '100%',
-                height: 'auto',
-                maxHeight: '100%',
-                objectFit: 'contain'
-              }}
-              alt={`Step ${step.index + 1} screenshot`}
-            />
-            {renderRect()}
+            {step.cropRect && !showFull && imgSize ? (
+              // Cropped view: use a wrapper div that clips the image
+              (() => {
+                const crop = step.cropRect
+                // Compute aspect ratio of the crop region
+                const cropAspect = crop.width / crop.height
+                // The wrapper takes full width; height is derived from crop aspect
+                return (
+                  <div style={{
+                    position: 'relative',
+                    width: '100%',
+                    paddingBottom: `${(1 / cropAspect) * 100}%`,
+                    overflow: 'hidden'
+                  }}>
+                    <img
+                      ref={imgRef}
+                      src={screenshotUrl}
+                      onLoad={handleImgLoad}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: `${(imgSize.w / crop.width) * 100}%`,
+                        height: `${(imgSize.h / crop.height) * 100}%`,
+                        marginLeft: `${-(crop.x / crop.width) * 100}%`,
+                        marginTop: `${-(crop.y / crop.height) * 100}%`,
+                        maxWidth: 'none',
+                        maxHeight: 'none'
+                      }}
+                      alt={`Step ${step.index + 1} screenshot`}
+                    />
+                  </div>
+                )
+              })()
+            ) : (
+              <img
+                ref={imgRef}
+                src={screenshotUrl}
+                onLoad={handleImgLoad}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  height: 'auto',
+                  maxHeight: '100%',
+                  objectFit: 'contain'
+                }}
+                alt={`Step ${step.index + 1} screenshot`}
+              />
+            )}
+            {renderHighlightSvg()}
           </>
         ) : (
           <div
@@ -147,10 +260,23 @@ function StepCard({ step, onTextChange }: StepCardProps): JSX.Element {
 
       {/* Status + step info */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontWeight: 600, fontSize: 14 }}>
-          Step {step.index + 1}
-        </span>
         {statusBadge()}
+        {step.cropRect && (
+          <button
+            onClick={() => setShowFull((v) => !v)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#6b7280',
+              fontSize: 11,
+              cursor: 'pointer',
+              textDecoration: 'underline',
+              padding: 0
+            }}
+          >
+            {showFull ? 'Show cropped' : 'Show full screenshot'}
+          </button>
+        )}
         <span style={{ color: '#9ca3af', fontSize: 12, marginLeft: 'auto' }}>
           {(step.timestamp / 1000).toFixed(1)}s
         </span>

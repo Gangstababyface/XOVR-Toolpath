@@ -16,12 +16,15 @@ export interface Step {
   index: number
   timestamp: number
   screenshot: string
+  cropRect: Rect | null
   selectionRect: Rect | null
   rawTranscript: string
   editedText: string
   claudeQuestions: QAPair[]
   rewriteStatus: 'raw' | 'ai_rewritten' | 'manually_edited'
   rewriteSource: 'none' | 'batch' | 'interactive'
+  title: string
+  titleManuallyEdited: boolean
 }
 
 export interface RecordingSessionState {
@@ -51,6 +54,32 @@ export interface AutosaveSnapshot {
   schemaVersion: number
   savedAt: string
   session: RecordingSessionState
+}
+
+export interface ClaudeMemory {
+  projectContext: string
+  softwareBeingDocumented: string
+  targetAudience: string
+  previousDecisions: Array<{ question: string; answer: string }>
+  terminologyPreferences: Record<string, string>
+  styleNotes: string[]
+  lastUpdated: string
+}
+
+export interface DocumentReviewQuestion {
+  id: string
+  question: string
+  context: string
+}
+
+export interface DocumentReviewResult {
+  documentTitle: string
+  documentSummary: string
+  steps: Array<{
+    index: number
+    suggestedTitle: string | null
+    rewrittenDescription: string
+  }>
 }
 
 export interface TranscriptionProgress {
