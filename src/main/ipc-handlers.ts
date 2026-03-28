@@ -91,9 +91,16 @@ function findDisplayForSource(
 function createToolbarWindow(): void {
   if (toolbarWindow && !toolbarWindow.isDestroyed()) return
 
+  const primaryDisplay = screen.getPrimaryDisplay()
+  const { width: screenW, height: screenH } = primaryDisplay.workAreaSize
+  const toolbarW = 520
+  const toolbarH = 56
+
   toolbarWindow = new BrowserWindow({
-    width: 420,
-    height: 90,
+    width: toolbarW,
+    height: toolbarH,
+    x: Math.round((screenW - toolbarW) / 2),
+    y: screenH - toolbarH - 20,
     frame: false,
     alwaysOnTop: true,
     resizable: false,

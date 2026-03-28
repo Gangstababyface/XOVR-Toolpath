@@ -70,13 +70,38 @@ function Toolbar(): JSX.Element {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 12,
-          padding: '0 20px',
+          gap: 8,
+          padding: '0 12px 0 0',
           flex: 1,
           color: '#fff',
           userSelect: 'none'
         }}
       >
+        {/* Drag grip — visual indicator that toolbar is draggable */}
+        <div
+          title="Drag to move"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '0 14px',
+            cursor: 'grab',
+            alignSelf: 'stretch',
+            borderRight: '1px solid rgba(255,255,255,0.15)',
+            marginRight: 4
+          }}
+        >
+          {/* 6-dot grid pattern */}
+          <div style={{ display: 'grid', gridTemplateColumns: '4px 4px', gap: 4 }}>
+            {[...Array(6)].map((_, i) => (
+              <div key={i} style={{ width: 4, height: 4, borderRadius: '50%', backgroundColor: 'rgba(255,255,255,0.5)' }} />
+            ))}
+          </div>
+          <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)', letterSpacing: 0.5 }}>
+            DRAG
+          </span>
+        </div>
+
         {/* Recording indicator dot */}
         <div
           style={{
