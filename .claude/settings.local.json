@@ -3,7 +3,9 @@
     "allow": [
       "Bash(npm install:*)",
       "Bash(npx electron-vite:*)",
-      "Bash(ls -1 *.json *.ts *.yml .gitignore)"
+      "Bash(ls -1 *.json *.ts *.yml .gitignore)",
+      "Bash(python3:*)",
+      "Bash(npm run:*)"
     ]
   }
 }
