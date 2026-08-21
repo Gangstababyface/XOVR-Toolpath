@@ -8,6 +8,7 @@ files:
   - "!node_modules/**/*"
 asarUnpack:
   - "node_modules/ffmpeg-static/**"
+  - "node_modules/uiohook-napi/**"
 win:
   target:
     - target: nsis

@@ -186,6 +186,16 @@ export function updateStepTitle(stepId: string, title: string, manuallyEdited: b
   broadcast()
 }
 
+export function updateStepSelection(stepId: string, selectionRect: import('../shared/types').Rect): void {
+  state = {
+    ...state,
+    steps: state.steps.map((s) =>
+      s.id === stepId ? { ...s, selectionRect } : s
+    )
+  }
+  broadcast()
+}
+
 export function setCaptureQueueSize(size: number): void {
   state = { ...state, activeCaptureQueue: size }
   broadcast()

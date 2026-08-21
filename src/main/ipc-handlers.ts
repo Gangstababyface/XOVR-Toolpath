@@ -7,7 +7,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { IpcChannels } from '../shared/ipc-channels'
 import type { Rect, Step } from '../shared/types'
 import * as stateBus from './state-bus'
-import { registerHotkeys, unregisterHotkeys } from './hotkeys'
+import { startMouseHook, stopMouseHook } from './mouse-hook'
 import { transcribeAllSteps } from './transcription'
 import { generateQuestions, rewriteStep, batchRewriteAll, documentReview, documentRewrite } from './claude'
 import { loadClaudeMemory, saveClaudeMemory } from './claude-memory'
@@ -16,23 +16,7 @@ import { saveProject, loadProject, exportMarkdown, exportHtml, exportPdf } from 
 import { checkForRecoverableAutosave, discardAutosave, markClean } from './autosave'
 
 let toolbarWindow: BrowserWindow | null = null
-let overlayWindow: BrowserWindow | null = null
 let pendingSessionDir: string | null = null
-
-// ── Overlay communication state ──
-
-interface OverlayInitData {
-  screenshotDataUrl: string
-  cursorX: number
-  cursorY: number
-  imgWidth: number
-  imgHeight: number
-  displayScale: number
-  mode: 'crop' | 'highlight'
-}
-
-let overlayData: OverlayInitData | null = null
-let overlayResultResolver: ((rect: Rect | null) => void) | null = null
 
 // ── Capture queue ──
 
@@ -136,52 +120,6 @@ function closeToolbarWindow(): void {
   }
 }
 
-function createOverlayWindow(displayBounds: Electron.Rectangle): BrowserWindow {
-  const win = new BrowserWindow({
-    x: displayBounds.x,
-    y: displayBounds.y,
-    width: displayBounds.width,
-    height: displayBounds.height,
-    frame: false,
-    resizable: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    focusable: true,
-    webPreferences: {
-      preload: join(__dirname, '../preload/preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  })
-
-  win.webContents.on('console-message', (_event, level, message) => {
-    const tag = ['verbose', 'info', 'warn', 'error'][level] || 'log'
-    console.log(`[overlay:${tag}] ${message}`)
-  })
-
-  if (process.env.ELECTRON_RENDERER_URL) {
-    win.loadURL(process.env.ELECTRON_RENDERER_URL + '#overlay')
-  } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'overlay' })
-  }
-
-  win.setAlwaysOnTop(true, 'screen-saver')
-
-  win.webContents.on('did-finish-load', () => {
-    win.focus()
-    win.focusOnWebView()
-  })
-
-  return win
-}
-
-function closeOverlayWindow(): void {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.close()
-    overlayWindow = null
-  }
-}
-
 // ── Step capture flow ──
 
 function handleStepMarker(cursor: { x: number; y: number }): void {
@@ -217,15 +155,7 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
     }
     console.log('[capture] Effective timestamp: %d ms', effectiveTimestamp)
 
-    // Step 2 — hide toolbar so it doesn't appear in the screenshot
-    if (toolbarWindow && !toolbarWindow.isDestroyed()) {
-      toolbarWindow.hide()
-    }
-
-    // Brief delay to let the window fully disappear from the compositor
-    await new Promise((r) => setTimeout(r, 100))
-
-    // Capture screenshot from the recorded source at native resolution
+    // Step 2 — capture screenshot from the recorded source at native resolution
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width: 7680, height: 4320 }
@@ -241,24 +171,22 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
       return
     }
 
-    // Step 3 — resolve the display that the source belongs to
-    // This is the single identity used for overlay bounds, scale, and coordinates
+    // Resolve the display that the source belongs to
     const sourceDisplay = findDisplayForSource(source)
     const scaleFactor = sourceDisplay.scaleFactor
     console.log(
-      '[capture] Source display: id=%d bounds=%dx%d at (%d,%d) scale=%s sourceId=%s display_id=%s',
+      '[capture] Source display: id=%d bounds=%dx%d at (%d,%d) scale=%s',
       sourceDisplay.id,
       sourceDisplay.bounds.width, sourceDisplay.bounds.height,
       sourceDisplay.bounds.x, sourceDisplay.bounds.y,
-      scaleFactor, source.id, source.display_id
+      scaleFactor
     )
 
     const screenshot = source.thumbnail
     const imgWidth = screenshot.getSize().width
     const imgHeight = screenshot.getSize().height
-    console.log('[capture] Screenshot: %dx%d from source %s', imgWidth, imgHeight, source.id)
 
-    // Step 4 — save JPEG at quality 80
+    // Step 3 — save JPEG at quality 80
     const stepIndex = state.steps.length
     const capturesDir = join(state.sessionDir, 'captures')
     mkdirSync(capturesDir, { recursive: true })
@@ -268,16 +196,8 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
     await writeFile(screenshotPath, jpegBuffer)
     console.log('[capture] Screenshot saved: %s (%d bytes, %dx%d)', screenshotPath, jpegBuffer.length, imgWidth, imgHeight)
 
-    // Show toolbar again after screenshot is captured
-    if (toolbarWindow && !toolbarWindow.isDestroyed()) {
-      toolbarWindow.show()
-    }
-
-    // Step 5 — prepare overlay data
-    const screenshotDataUrl = `data:image/jpeg;base64,${jpegBuffer.toString('base64')}`
-
-    // Map cursor from absolute screen coords to source-display-relative coords.
-    // If cursor is on a different display, clamp to center of the source display.
+    // Step 4 — auto-seed selectionRect centered on click position
+    // Map cursor from absolute screen coords to screenshot pixel coords
     let relCursorX = cursor.x - sourceDisplay.bounds.x
     let relCursorY = cursor.y - sourceDisplay.bounds.y
 
@@ -288,50 +208,36 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
       relCursorY < sourceDisplay.bounds.height
 
     if (!inBounds) {
-      console.log('[capture] Cursor is on a different display — centering default box on source display')
       relCursorX = Math.round(sourceDisplay.bounds.width / 2)
       relCursorY = Math.round(sourceDisplay.bounds.height / 2)
     }
 
-    // Step 5a — CROP overlay (blue/cyan, "Select area to show")
-    overlayData = {
-      screenshotDataUrl,
-      cursorX: relCursorX,
-      cursorY: relCursorY,
-      imgWidth,
-      imgHeight,
-      displayScale: scaleFactor,
-      mode: 'crop'
+    // Convert display-relative coords to screenshot pixel coords
+    const pixelX = Math.round(relCursorX * scaleFactor)
+    const pixelY = Math.round(relCursorY * scaleFactor)
+
+    // Default selection box: 200x150 in screenshot pixels, centered on click
+    const boxW = Math.min(200, imgWidth)
+    const boxH = Math.min(150, imgHeight)
+    const selectionRect: Rect = {
+      x: Math.max(0, Math.min(pixelX - Math.round(boxW / 2), imgWidth - boxW)),
+      y: Math.max(0, Math.min(pixelY - Math.round(boxH / 2), imgHeight - boxH)),
+      width: boxW,
+      height: boxH,
+      displayScale: scaleFactor
     }
 
-    console.log('[capture] Opening CROP overlay...')
-    const cropRect = await openOverlayAndWaitForResult(sourceDisplay.bounds)
-    console.log('[capture] Crop overlay closed. Result: %s', cropRect ? JSON.stringify(cropRect) : 'skipped')
-
-    // Step 5b — HIGHLIGHT overlay (red, "Highlight click target")
-    console.log('[capture] Setting highlight overlay data...')
-    overlayData = {
-      screenshotDataUrl,
-      cursorX: relCursorX,
-      cursorY: relCursorY,
-      imgWidth,
-      imgHeight,
-      displayScale: scaleFactor,
-      mode: 'highlight'
-    }
-
-    console.log('[capture] Opening HIGHLIGHT overlay...')
-    const highlightRect = await openOverlayAndWaitForResult(sourceDisplay.bounds)
-    console.log('[capture] Highlight overlay closed. Result: %s', highlightRect ? JSON.stringify(highlightRect) : 'skipped')
-
-    // Step 6 — create Step record
+    // Step 5 — create Step record
     const step: Step = {
       id: uuidv4(),
       index: stepIndex,
       timestamp: effectiveTimestamp,
       screenshot: screenshotPath,
-      cropRect,
-      selectionRect: highlightRect,
+      clickX: cursor.x,
+      clickY: cursor.y,
+      displayId: sourceDisplay.id,
+      displayScale: scaleFactor,
+      selectionRect,
       rawTranscript: '',
       editedText: '',
       claudeQuestions: [],
@@ -342,12 +248,11 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
     }
 
     stateBus.addStep(step)
-    console.log('[capture] Step %d created (crop: %s, highlight: %s)', stepIndex, cropRect ? 'yes' : 'skipped', highlightRect ? 'yes' : 'skipped')
+    console.log('[capture] Step %d created at (%d,%d)', stepIndex, cursor.x, cursor.y)
   } catch (err) {
     console.error('[capture] Failed:', err)
   } finally {
     captureInProgress = false
-    overlayData = null
 
     // Process next queued capture
     if (captureQueue.length > 0) {
@@ -357,48 +262,6 @@ async function processCaptureRequest(cursor: { x: number; y: number }): Promise<
       processCaptureRequest(next)
     }
   }
-}
-
-async function openOverlayAndWaitForResult(
-  displayBounds: Electron.Rectangle
-): Promise<Rect | null> {
-  // Ensure any previous overlay is fully closed before opening a new one
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    await new Promise<void>((resolve) => {
-      overlayWindow!.on('closed', () => resolve())
-      overlayWindow!.close()
-    })
-    overlayWindow = null
-  }
-
-  return new Promise<Rect | null>((resolve) => {
-    let resolved = false
-
-    overlayResultResolver = (rect) => {
-      if (resolved) return
-      resolved = true
-      overlayResultResolver = null
-      closeOverlayWindow()
-      resolve(rect)
-    }
-
-    overlayWindow = createOverlayWindow(displayBounds)
-
-    // Ensure focus after the window is fully ready
-    overlayWindow.once('show', () => {
-      overlayWindow?.focus()
-    })
-    overlayWindow.show()
-
-    overlayWindow.on('closed', () => {
-      overlayWindow = null
-      if (!resolved) {
-        resolved = true
-        overlayResultResolver = null
-        resolve(null)
-      }
-    })
-  })
 }
 
 // ── IPC registration ──
@@ -418,7 +281,7 @@ export function registerIpcHandlers(): void {
     stateBus.startRecording(pendingSessionDir)
     pendingSessionDir = null
     createToolbarWindow()
-    registerHotkeys(handleStepMarker)
+    startMouseHook(handleStepMarker)
   })
 
   ipcMain.handle(IpcChannels.RECORDING_PAUSE, async () => {
@@ -431,13 +294,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.RECORDING_STOP, async () => {
     console.log('[ipc] recording:stop — pendingSessionDir=%s isRecording=%s', pendingSessionDir, stateBus.getState().isRecording)
-    unregisterHotkeys()
+    stopMouseHook()
     captureQueue.length = 0
     broadcastQueueSize()
-    if (overlayResultResolver) {
-      overlayResultResolver(null)
-    }
-    closeOverlayWindow()
     if (pendingSessionDir) {
       rm(pendingSessionDir, { recursive: true, force: true }).catch(() => {})
       pendingSessionDir = null
@@ -461,28 +320,9 @@ export function registerIpcHandlers(): void {
 
   // ── Capture / Overlay — Phase 3 ──
 
-  ipcMain.handle(IpcChannels.CAPTURE_MARK_STEP, async (_event, _data) => {
+  ipcMain.handle(IpcChannels.CAPTURE_MARK_STEP, async () => {
     const cursor = screen.getCursorScreenPoint()
     handleStepMarker(cursor)
-  })
-
-  ipcMain.handle(IpcChannels.OVERLAY_OPEN, async (_event, _data) => {
-    // Stub — overlay is opened by the capture flow
-  })
-
-  ipcMain.handle(IpcChannels.OVERLAY_GET_DATA, async () => {
-    console.log('[ipc] overlay:get-data — mode=%s hasData=%s', overlayData?.mode, !!overlayData)
-    return overlayData
-  })
-
-  ipcMain.handle(IpcChannels.OVERLAY_RESULT, async (_event, data: { rect: Rect | null }) => {
-    console.log('[ipc] overlay:result — rect=%s resolver=%s', data.rect ? JSON.stringify(data.rect) : 'null', !!overlayResultResolver)
-    if (overlayResultResolver) {
-      overlayResultResolver(data.rect)
-    } else {
-      // No resolver waiting — force-close the orphaned overlay window
-      closeOverlayWindow()
-    }
   })
 
   // ── Transcription — Phase 4 ──
@@ -511,6 +351,13 @@ export function registerIpcHandlers(): void {
     IpcChannels.STEP_UPDATE_TEXT,
     async (_event, data: { stepId: string; editedText: string }) => {
       stateBus.updateStepText(data.stepId, data.editedText)
+    }
+  )
+
+  ipcMain.handle(
+    IpcChannels.STEP_UPDATE_SELECTION,
+    async (_event, data: { stepId: string; selectionRect: Rect }) => {
+      stateBus.updateStepSelection(data.stepId, data.selectionRect)
     }
   )
 

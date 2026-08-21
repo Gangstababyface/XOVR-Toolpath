@@ -19,39 +19,23 @@ const api = {
   recordingSaveMedia: (data: { video: ArrayBuffer; audio: ArrayBuffer }): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.RECORDING_SAVE_MEDIA, data),
 
-  // Capture
-  captureMarkStep: (data?: { screenshotDataUrl?: string }): Promise<void> =>
-    ipcRenderer.invoke(IpcChannels.CAPTURE_MARK_STEP, data),
-  overlayOpen: (data: {
-    screenshotPath: string
-    cursorX: number
-    cursorY: number
-  }): Promise<void> => ipcRenderer.invoke(IpcChannels.OVERLAY_OPEN, data),
-  overlayGetData: (): Promise<{
-    screenshotDataUrl: string
-    cursorX: number
-    cursorY: number
-    imgWidth: number
-    imgHeight: number
-    displayScale: number
-    mode?: 'crop' | 'highlight'
-  } | null> => ipcRenderer.invoke(IpcChannels.OVERLAY_GET_DATA),
-  overlayResult: (data: { rect: Rect | null }): Promise<void> =>
-    ipcRenderer.invoke(IpcChannels.OVERLAY_RESULT, data),
+  // Capture (manual fallback from toolbar)
+  captureMarkStep: (): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.CAPTURE_MARK_STEP),
 
-  // Hotkey status
-  onHotkeyStatus: (
-    callback: (data: { registered: boolean }) => void
+  // Mouse hook status
+  onMouseHookStatus: (
+    callback: (data: { active: boolean; error?: string }) => void
   ): (() => void) => {
     const handler = (
       _event: Electron.IpcRendererEvent,
-      data: { registered: boolean }
+      data: { active: boolean; error?: string }
     ): void => {
       callback(data)
     }
-    ipcRenderer.on('hotkey:status', handler)
+    ipcRenderer.on(IpcChannels.MOUSE_HOOK_STATUS, handler)
     return () => {
-      ipcRenderer.removeListener('hotkey:status', handler)
+      ipcRenderer.removeListener(IpcChannels.MOUSE_HOOK_STATUS, handler)
     }
   },
 
@@ -62,6 +46,8 @@ const api = {
   // Step editing
   stepUpdateText: (data: { stepId: string; editedText: string }): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.STEP_UPDATE_TEXT, data),
+  stepUpdateSelection: (data: { stepId: string; selectionRect: Rect }): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.STEP_UPDATE_SELECTION, data),
 
   // Transcription
   transcribeStart: (): Promise<void> =>

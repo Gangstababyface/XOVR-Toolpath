@@ -14,16 +14,16 @@ function Toolbar(): JSX.Element {
   const pauseStartedAt = useRecordingStore((s) => s.pauseStartedAt)
 
   const [elapsed, setElapsed] = useState('00:00')
-  const [hotkeyOk, setHotkeyOk] = useState(true)
+  const [mouseHookActive, setMouseHookActive] = useState(true)
+  const [mouseHookError, setMouseHookError] = useState<string | null>(null)
 
-  // Listen for hotkey registration status
+  // Listen for mouse hook status
   useEffect(() => {
-    const handler = (_event: unknown, data: { registered: boolean }) => {
-      setHotkeyOk(data.registered)
-    }
-    // @ts-expect-error onHotkeyStatus not in typed API
-    const cleanup = window.api.onHotkeyStatus?.(handler)
-    return () => cleanup?.()
+    const cleanup = window.api.onMouseHookStatus((data) => {
+      setMouseHookActive(data.active)
+      setMouseHookError(data.error || null)
+    })
+    return () => cleanup()
   }, [])
 
   useEffect(() => {
@@ -142,7 +142,7 @@ function Toolbar(): JSX.Element {
           <button
             onClick={() => window.api.captureMarkStep()}
             style={{ ...btnStyle, backgroundColor: '#2563eb' }}
-            title="Mark Step (Ctrl+Shift+S)"
+            title="Manual step marker"
           >
             + Step
           </button>
@@ -167,8 +167,8 @@ function Toolbar(): JSX.Element {
         </div>
       </div>
 
-      {/* Hotkey warning bar */}
-      {!hotkeyOk && (
+      {/* Mouse hook warning bar */}
+      {(!mouseHookActive || mouseHookError) && (
         <div
           style={{
             padding: '3px 20px',
@@ -178,7 +178,9 @@ function Toolbar(): JSX.Element {
             textAlign: 'center'
           }}
         >
-          Ctrl+Shift+S unavailable — use the "+ Step" button
+          {mouseHookError
+            ? `Click capture error: ${mouseHookError}`
+            : 'Click capture inactive — use the "+ Step" button'}
         </div>
       )}
     </div>

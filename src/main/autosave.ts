@@ -54,10 +54,15 @@ export function checkForRecoverableAutosave(): AutosaveSnapshot | null {
     if (!snapshot.schemaVersion || snapshot.schemaVersion > 2 || !snapshot.session?.steps?.length) return null
     // Migrate older schema steps
     if (snapshot.schemaVersion <= 2) {
-      snapshot.session.steps = snapshot.session.steps.map((s, i) => ({
+      snapshot.session.steps = snapshot.session.steps.map((s: Record<string, unknown>, i: number) => ({
         ...s,
-        cropRect: s.cropRect ?? null,
-        title: s.title || `Step ${i + 1}`,
+        // v2→v3 migration: map old cropRect to selectionRect if selectionRect missing
+        selectionRect: s.selectionRect ?? s.cropRect ?? null,
+        clickX: s.clickX ?? 0,
+        clickY: s.clickY ?? 0,
+        displayId: s.displayId ?? 0,
+        displayScale: s.displayScale ?? 1,
+        title: (s.title as string) || `Step ${i + 1}`,
         titleManuallyEdited: s.titleManuallyEdited ?? false
       }))
     }

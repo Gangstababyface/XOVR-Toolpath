@@ -12,9 +12,9 @@ export const IpcChannels = {
 
   // Capture
   CAPTURE_MARK_STEP: 'capture:mark-step',
-  OVERLAY_OPEN: 'overlay:open',
-  OVERLAY_GET_DATA: 'overlay:get-data',
-  OVERLAY_RESULT: 'overlay:result',
+
+  // Mouse hook
+  MOUSE_HOOK_STATUS: 'mouse-hook:status',
 
   // Transcription
   TRANSCRIBE_START: 'transcribe:start',
@@ -45,6 +45,7 @@ export const IpcChannels = {
 
   // Step editing
   STEP_UPDATE_TEXT: 'step:update-text',
+  STEP_UPDATE_SELECTION: 'step:update-selection',
 
   // Settings
   SETTINGS_GET: 'settings:get',

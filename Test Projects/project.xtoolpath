@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "title": "project",
+  "createdAt": "2026-03-28T14:08:59.061Z",
+  "updatedAt": "2026-03-28T14:08:59.061Z",
+  "steps": [
+    {
+      "id": "16269515-1b31-4eff-a573-023360f3c094",
+      "index": 0,
+      "timestamp": 4073,
+      "screenshot": "project_assets/captures/step-0.jpg",
+      "selectionRect": {
+        "x": 3327,
+        "y": 1261,
+        "width": 1199,
+        "height": 469,
+        "displayScale": 1
+      },
+      "rawTranscript": "Oh, here I am, there you are.",
+      "editedText": "Verify that the XOVR Toolpath recording interface has appeared correctly, displaying the recording controls with REC button, timer, and playback options in the center of the screen.",
+      "claudeQuestions": [
+        {
+          "question": "What specific element or action in the XOVR Toolpath interface is being referred to with 'there you are'?",
+          "answer": "just debugging this app so just rewrite to aid in that"
+        },
+        {
+          "question": "Is this comment referring to the recording interface that appeared, or to a specific button or feature within it?",
+          "answer": "just debugging this app so just rewrite to aid in that"
+        }
+      ],
+      "rewriteStatus": "ai_rewritten",
+      "rewriteSource": "interactive"
+    },
+    {
+      "id": "13787e3b-e765-4bb8-b8ae-c3b1f7a0a6c5",
+      "index": 1,
+      "timestamp": 12776,
+      "screenshot": "project_assets/captures/step-1.jpg",
+      "selectionRect": {
+        "x": 2793,
+        "y": 933,
+        "width": 1083,
+        "height": 333,
+        "displayScale": 1
+      },
+      "rawTranscript": "This is ExoVR Toolpath.",
+      "editedText": "Confirm that the XOVR Toolpath dialog window is displayed with the title \"XOVR Toolpath\" and the message \"Recording in progress. Use the toolbar to pause or stop.\"",
+      "claudeQuestions": [],
+      "rewriteStatus": "ai_rewritten",
+      "rewriteSource": "interactive"
+    }
+  ],
+  "assetBasePath": "project_assets"
+}

@@ -61,30 +61,20 @@ function broadcastProgress(data: {
 
 async function annotateScreenshot(
   screenshotPath: string,
-  rect: Rect | null,
-  cropRect?: Rect | null
+  rect: Rect | null
 ): Promise<string> {
   const buffer = await readFile(screenshotPath)
 
-  if (!rect && !cropRect) {
+  if (!rect) {
     return buffer.toString('base64')
   }
 
   const filters: string[] = []
 
-  // Apply crop first (so highlight coords need to be translated)
-  if (cropRect) {
-    filters.push(`crop=${Math.round(cropRect.width)}:${Math.round(cropRect.height)}:${Math.round(cropRect.x)}:${Math.round(cropRect.y)}`)
-  }
-
-  // Draw highlight rect (translate to cropped coordinates if cropped)
-  if (rect) {
-    const offsetX = cropRect ? cropRect.x : 0
-    const offsetY = cropRect ? cropRect.y : 0
-    filters.push(
-      `drawbox=x=${Math.round(rect.x - offsetX)}:y=${Math.round(rect.y - offsetY)}:w=${Math.round(rect.width)}:h=${Math.round(rect.height)}:color=red:t=6`
-    )
-  }
+  // Draw highlight rect
+  filters.push(
+    `drawbox=x=${Math.round(rect.x)}:y=${Math.round(rect.y)}:w=${Math.round(rect.width)}:h=${Math.round(rect.height)}:color=red:t=6`
+  )
 
   if (filters.length === 0) {
     return buffer.toString('base64')
@@ -151,7 +141,7 @@ export async function generateQuestions(
   const client = createClient()
   const prevContext = buildPreviousStepsContext(allSteps, step.index)
 
-  const screenshotBase64 = await annotateScreenshot(step.screenshot, step.selectionRect, step.cropRect)
+  const screenshotBase64 = await annotateScreenshot(step.screenshot, step.selectionRect)
 
   console.log(
     '[claude:questions] step=%d model=%s screenshot=%dKB',
@@ -230,7 +220,7 @@ export async function rewriteStep(
   const client = createClient()
   const prevContext = buildPreviousStepsContext(allSteps, step.index)
 
-  const screenshotBase64 = await annotateScreenshot(step.screenshot, step.selectionRect, step.cropRect)
+  const screenshotBase64 = await annotateScreenshot(step.screenshot, step.selectionRect)
 
   let userText = `Raw transcript: "${step.rawTranscript}"${prevContext}`
 
@@ -346,7 +336,7 @@ export async function batchRewriteAll(): Promise<void> {
     broadcastProgress({ type: 'batch', stepIndex: i, total: steps.length, status: 'rewriting' })
 
     try {
-      const screenshotBase64 = await annotateScreenshot(step.screenshot, step.selectionRect, step.cropRect)
+      const screenshotBase64 = await annotateScreenshot(step.screenshot, step.selectionRect)
       const prevContext = buildPreviousStepsContext(
         stateBus.getState().steps, // Re-read to get latest edited text
         i
@@ -428,27 +418,19 @@ export async function batchRewriteAll(): Promise<void> {
 
 async function annotateAndResizeScreenshot(
   screenshotPath: string,
-  rect: Rect | null,
-  cropRect?: Rect | null
+  rect: Rect | null
 ): Promise<string> {
   const tempAnnotated = join(tmpdir(), `xovr-annotated-resize-${uuidv4()}.jpg`)
 
   const filters: string[] = []
 
-  // Apply crop first
-  if (cropRect) {
-    filters.push(`crop=${Math.round(cropRect.width)}:${Math.round(cropRect.height)}:${Math.round(cropRect.x)}:${Math.round(cropRect.y)}`)
-  }
-
   // Resize to max 1568px
   filters.push('scale=\'min(1568,iw)\':-1')
 
-  // Draw highlight (translated to cropped coords)
+  // Draw highlight rect
   if (rect) {
-    const offsetX = cropRect ? cropRect.x : 0
-    const offsetY = cropRect ? cropRect.y : 0
     filters.push(
-      `drawbox=x=${Math.round(rect.x - offsetX)}:y=${Math.round(rect.y - offsetY)}:w=${Math.round(rect.width)}:h=${Math.round(rect.height)}:color=red:t=6`
+      `drawbox=x=${Math.round(rect.x)}:y=${Math.round(rect.y)}:w=${Math.round(rect.width)}:h=${Math.round(rect.height)}:color=red:t=6`
     )
   }
 
@@ -521,7 +503,7 @@ If no questions are needed, respond with an empty array: []`
   for (const step of steps) {
     try {
       const imgPath = step.screenshot
-      const base64 = await annotateAndResizeScreenshot(imgPath, step.selectionRect, step.cropRect)
+      const base64 = await annotateAndResizeScreenshot(imgPath, step.selectionRect)
       content.push({
         type: 'image',
         source: { type: 'base64', media_type: 'image/jpeg', data: base64 }
@@ -633,7 +615,7 @@ ${qaText || '(No questions were asked)'}`
   for (const step of steps) {
     try {
       const imgPath = step.screenshot
-      const base64 = await annotateAndResizeScreenshot(imgPath, step.selectionRect, step.cropRect)
+      const base64 = await annotateAndResizeScreenshot(imgPath, step.selectionRect)
       content.push({
         type: 'image',
         source: { type: 'base64', media_type: 'image/jpeg', data: base64 }

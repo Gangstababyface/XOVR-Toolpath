@@ -83,54 +83,19 @@ function DocumentPreview({ steps }: DocumentPreviewProps): JSX.Element {
             <h2 style={{ fontSize: 18, marginBottom: 12, color: '#374151' }}>{stepTitle}</h2>
 
             {imgState?.url && (() => {
-              const crop = step.cropRect
-              const viewW = crop ? crop.width : imgState.naturalWidth
-              const viewH = crop ? crop.height : imgState.naturalHeight
-
-              // Translate highlight to cropped coordinates
-              const hlRect = step.selectionRect ? {
-                x: step.selectionRect.x - (crop ? crop.x : 0),
-                y: step.selectionRect.y - (crop ? crop.y : 0),
-                width: step.selectionRect.width,
-                height: step.selectionRect.height
-              } : null
+              const viewW = imgState.naturalWidth
+              const viewH = imgState.naturalHeight
 
               return (
                 <div style={{ position: 'relative', display: 'inline-block', marginBottom: 12, overflow: 'hidden', borderRadius: 4, border: '1px solid #e5e7eb' }}>
-                  {crop ? (
-                    <div style={{
-                      position: 'relative',
-                      width: '100%',
-                      maxWidth: Math.min(viewW, 900),
-                      paddingBottom: `${(viewH / viewW) * 100}%`,
-                      overflow: 'hidden'
-                    }}>
-                      <img
-                        src={imgState.url}
-                        alt={stepTitle}
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          width: `${(imgState.naturalWidth / crop.width) * 100}%`,
-                          height: `${(imgState.naturalHeight / crop.height) * 100}%`,
-                          marginLeft: `${-(crop.x / crop.width) * 100}%`,
-                          marginTop: `${-(crop.y / crop.height) * 100}%`,
-                          maxWidth: 'none',
-                          maxHeight: 'none'
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <img
-                      src={imgState.url}
-                      alt={stepTitle}
-                      style={{ display: 'block', maxWidth: '100%', height: 'auto' }}
-                    />
-                  )}
+                  <img
+                    src={imgState.url}
+                    alt={stepTitle}
+                    style={{ display: 'block', maxWidth: '100%', height: 'auto' }}
+                  />
 
-                  {/* Highlight rect overlay (in cropped coordinate space) */}
-                  {hlRect && (
+                  {/* Selection rect overlay */}
+                  {step.selectionRect && (
                     <svg
                       style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
                       width="100%" height="100%"
@@ -138,8 +103,8 @@ function DocumentPreview({ steps }: DocumentPreviewProps): JSX.Element {
                       preserveAspectRatio="xMinYMin meet"
                     >
                       <rect
-                        x={hlRect.x} y={hlRect.y}
-                        width={hlRect.width} height={hlRect.height}
+                        x={step.selectionRect.x} y={step.selectionRect.y}
+                        width={step.selectionRect.width} height={step.selectionRect.height}
                         fill="none" stroke="red"
                         strokeWidth={Math.max(3, Math.round(Math.max(viewW, viewH) / 400))}
                       />

@@ -6,7 +6,6 @@ import {
 } from './stores/recordingStore'
 import { useMediaCapture } from './hooks/useMediaCapture'
 import Toolbar from './pages/Toolbar'
-import SelectionOverlay from './pages/SelectionOverlay'
 import TranscriptionProgress from './components/TranscriptionProgress'
 import EditPage from './pages/EditPage'
 import SettingsPage from './pages/SettingsPage'
@@ -168,10 +167,6 @@ function App(): JSX.Element {
 
   if (hash === '#toolbar') {
     return <Toolbar />
-  }
-
-  if (hash === '#overlay') {
-    return <SelectionOverlay />
   }
 
   return <MainView />

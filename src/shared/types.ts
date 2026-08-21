@@ -16,7 +16,10 @@ export interface Step {
   index: number
   timestamp: number
   screenshot: string
-  cropRect: Rect | null
+  clickX: number
+  clickY: number
+  displayId: number
+  displayScale: number
   selectionRect: Rect | null
   rawTranscript: string
   editedText: string

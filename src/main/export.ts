@@ -54,7 +54,12 @@ export async function loadProject(filePath: string): Promise<ProjectFile> {
     ...step,
     screenshot: join(projectDir, step.screenshot.replace(/\//g, '\\')),
     // v1/v2 migration: add defaults for new fields
-    cropRect: step.cropRect ?? null,
+    // v1/v2 migration: map old cropRect to selectionRect if needed
+    selectionRect: step.selectionRect ?? (step as Record<string, unknown>).cropRect as import('../shared/types').Rect | null ?? null,
+    clickX: step.clickX ?? 0,
+    clickY: step.clickY ?? 0,
+    displayId: step.displayId ?? 0,
+    displayScale: step.displayScale ?? 1,
     title: step.title || `Step ${i + 1}`,
     titleManuallyEdited: step.titleManuallyEdited ?? false
   }))
@@ -124,41 +129,13 @@ function generateHtml(steps: Step[]): string {
 
     const text = step.editedText || step.rawTranscript || ''
 
-    // Determine visible region (crop or full)
-    const crop = step.cropRect
-    const viewX = crop ? crop.x : 0
-    const viewY = crop ? crop.y : 0
-    const viewW = crop ? crop.width : imgWidth
-    const viewH = crop ? crop.height : imgHeight
-
-    // Highlight rect translated to cropped coordinates
-    const selectionOverlay = step.selectionRect && viewW > 0
-      ? renderSelectionSvg(
-          {
-            ...step.selectionRect,
-            x: step.selectionRect.x - viewX,
-            y: step.selectionRect.y - viewY
-          },
-          viewW, viewH
-        )
+    // Highlight rect overlay on full image
+    const selectionOverlay = step.selectionRect && imgWidth > 0
+      ? renderSelectionSvg(step.selectionRect, imgWidth, imgHeight)
       : ''
 
     let imgHtml = ''
-    if (imgSrc && crop && imgWidth > 0) {
-      // Cropped: use overflow:hidden wrapper with offset image
-      // Scale crop to fit max 800px wide for export
-      const scale = Math.min(1, 800 / crop.width)
-      const dispW = Math.round(crop.width * scale)
-      const dispH = Math.round(crop.height * scale)
-      const fullW = Math.round(imgWidth * scale)
-      const fullH = Math.round(imgHeight * scale)
-      const offX = Math.round(crop.x * scale)
-      const offY = Math.round(crop.y * scale)
-      imgHtml = `<div class="img-container" style="position:relative;overflow:hidden;width:${dispW}px;height:${dispH}px;">
-        <img src="${imgSrc}" alt="${escapeHtml(stepTitle)}" style="position:absolute;top:${-offY}px;left:${-offX}px;width:${fullW}px;height:${fullH}px;max-width:none;max-height:none;" />
-        ${selectionOverlay}
-      </div>`
-    } else if (imgSrc) {
+    if (imgSrc) {
       imgHtml = `<div class="img-container">
         <img src="${imgSrc}" alt="${escapeHtml(stepTitle)}" />
         ${selectionOverlay}
